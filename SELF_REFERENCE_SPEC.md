@@ -3,8 +3,9 @@
 ## Status and intent
 
 This document specifies self-referential assignment for a new lazy Property
-implementation. It is independent of Gradle's current implementation and can
-be implemented separately from the collection arithmetic manifest.
+implementation. It builds on [Provider API Foundations](PROVIDER_API_FOUNDATIONS.md)
+but can be implemented separately from
+[Derived Collection Operations](DERIVED_COLLECTION_OPERATIONS.md).
 
 The feature allows assignment-shaped expressions such as:
 
