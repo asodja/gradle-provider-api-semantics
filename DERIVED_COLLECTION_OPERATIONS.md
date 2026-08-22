@@ -88,89 +88,93 @@ A + empty = A        empty + A = A
 A - empty = A        empty - A = empty
 ```
 
+These laws apply to present empty collections. Missing is not an empty value.
+
 Subtraction is not an inverse of addition. In particular, an implementation
 must not rewrite `(A + B) - B` to `A`. Such a rewrite loses list duplicates
 and overwritten map values.
 
 ## 3. Definition from primitive operations
 
-### 3.1 Algebra and normalization
+### 3.1 Collection algebra interface
 
-Addition and subtraction may accept different operand types. For example, map
-addition accepts entries while map subtraction accepts keys:
+The base addition combines two collection values. Element and bulk operands
+are converted to that value type before addition. Subtraction retains a
+separate removal type because, for example, map subtraction accepts keys:
 
 ```kotlin
-interface CollectionAlgebra<C : Any, A : Any, S : Any> {
-    val emptyValue: C
-    val emptyAddition: A
-    val emptySubtraction: S
+interface CollectionAlgebra<C : Any, E : Any, S : Any> {
+    fun collectionOf(element: E): C
+    fun collectionFrom(elements: Iterable<E>): C
 
-    fun add(left: C, right: A): C
-    fun subtract(left: C, right: S): C
+    fun plus(left: C, right: C): C
+    fun minus(left: C, removals: S): C
 }
-
-fun <T : Any> normalize(source: Provider<T>, empty: T): Provider<T> =
-    source.orElse(providerOf(empty))
 ```
 
-`C` is the property value, `A` is an addition operand, and `S` is a
-subtraction operand. Each algebra implementation supplies the behavior from
-the table in section 2.
+`C` is the property value, `E` is one addable element, and `S` is a
+subtraction operand. For maps, `E` is an entry and `S` supplies keys. Each
+implementation supplies the behavior from the table in section 2.
 
-Normalization locally interprets a missing collection contribution as the
-appropriate empty identity. Missing does not become globally equivalent to
-empty; raw `map`, `flatMap`, and `zip` remain missing-preserving.
+`collectionOf(e)` produces `[e]` for a list, `{e}` for a set, and a
+single-entry map for a map entry. `collectionFrom` performs the corresponding
+bulk conversion.
 
 ### 3.2 `plus` and `minus`
 
 These are the reference implementations. Public type-specific methods supply
 their `CollectionAlgebra` implicitly.
 
-A concrete right operand requires one dynamic input and uses `map`:
+A concrete collection is first wrapped as a provider:
 
 ```kotlin
-fun <C : Any, A : Any, S : Any> plus(
+fun <C : Any, E : Any, S : Any> plus(
     source: Provider<C>,
-    right: A,
-    algebra: CollectionAlgebra<C, A, S>
-): Provider<C> = normalize(source, algebra.emptyValue).map { left ->
-    algebra.add(left, right)
-}
+    right: C,
+    algebra: CollectionAlgebra<C, E, S>
+): Provider<C> = plus(source, providerOf(right), algebra)
+```
 
-fun <C : Any, A : Any, S : Any> minus(
+A provider-valued addition combines two present collections, otherwise selects
+the single contribution which is present. If both are missing, the result
+remains missing:
+
+```kotlin
+fun <C : Any, E : Any, S : Any> plus(
+    source: Provider<C>,
+    right: Provider<C>,
+    algebra: CollectionAlgebra<C, E, S>
+): Provider<C> =
+    source.zip(right, algebra::plus)
+        .orElse(source)
+        .orElse(right)
+```
+
+A concrete subtraction uses missing-preserving `map` because there must be a
+left collection from which to remove values:
+
+```kotlin
+fun <C : Any, E : Any, S : Any> minus(
     source: Provider<C>,
     right: S,
-    algebra: CollectionAlgebra<C, A, S>
-): Provider<C> = normalize(source, algebra.emptyValue).map { left ->
-    algebra.subtract(left, right)
+    algebra: CollectionAlgebra<C, E, S>
+): Provider<C> = source.map { left ->
+    algebra.minus(left, right)
 }
 ```
 
-A provider right operand requires two dynamic inputs and uses `zip` after both
-have been normalized:
+A provider-valued subtraction combines two present inputs and otherwise
+returns the left input. A missing right input therefore removes nothing, while
+a missing left input remains missing:
 
 ```kotlin
-fun <C : Any, A : Any, S : Any> plus(
-    source: Provider<C>,
-    right: Provider<A>,
-    algebra: CollectionAlgebra<C, A, S>
-): Provider<C> =
-    normalize(source, algebra.emptyValue).zip(
-        normalize(right, algebra.emptyAddition)
-    ) { left, resolvedRight ->
-        algebra.add(left, resolvedRight)
-    }
-
-fun <C : Any, A : Any, S : Any> minus(
+fun <C : Any, E : Any, S : Any> minus(
     source: Provider<C>,
     right: Provider<S>,
-    algebra: CollectionAlgebra<C, A, S>
-): Provider<C> =
-    normalize(source, algebra.emptyValue).zip(
-        normalize(right, algebra.emptySubtraction)
-    ) { left, resolvedRight ->
-        algebra.subtract(left, resolvedRight)
-    }
+    algebra: CollectionAlgebra<C, E, S>
+): Provider<C> = source.zip(right) { left, resolvedRight ->
+    algebra.minus(left, resolvedRight)
+}.orElse(source)
 ```
 
 Constructing any of these results remains lazy and does not mutate `source`.
@@ -185,28 +189,50 @@ The reference implementations produce these results:
 |---|---|---|---|
 | `A` | `B` | `A + B` | `A - B` |
 | `A` | missing | `A` | `A` |
-| missing | `B` | `B` | `empty` |
-| missing | missing | `empty` | `empty` |
+| missing | `B` | `B` | missing |
+| missing | missing | missing | missing |
 
-An input currently resolved through its empty fallback remains an input. If it
-later becomes present before finalization, its value participates normally.
+Addition accumulates whichever contributions are present but does not invent an
+empty result when every contribution is missing. Subtraction requires a left
+collection. All original providers remain inputs, so a provider which becomes
+present before finalization participates normally.
 
-### 3.4 Element providers
+### 3.4 Element and bulk operands
 
-A provider of one element is lifted to a provider of zero or one elements:
+Element and bulk providers are converted before invoking the base `plus`:
 
 ```kotlin
-element.map(::listOf).orElse(providerOf(emptyList()))
+fun <C : Any, E : Any, S : Any> plusElement(
+    source: Provider<C>,
+    element: Provider<E>,
+    algebra: CollectionAlgebra<C, E, S>
+): Provider<C> = plus(
+    source,
+    element.map(algebra::collectionOf),
+    algebra
+)
+
+fun <C : Any, E : Any, S : Any> plusAll(
+    source: Provider<C>,
+    elements: Provider<Iterable<E>>,
+    algebra: CollectionAlgebra<C, E, S>
+): Provider<C> = plus(
+    source,
+    elements.map(algebra::collectionFrom),
+    algebra
+)
 ```
 
-A missing element provider therefore contributes no element. It does not need
-a fictitious empty value of type `E`.
+Concrete operands use the same definitions after `providerOf`. A missing
+element or bulk provider remains a missing contribution: addition ignores it
+when the left collection is present and remains missing when both sides are
+missing.
 
 ## 4. Property selection and convention
 
 Collection operations do not have a separate convention rule. The property
 first selects its explicit or convention plan according to the foundational
-specification; arithmetic then normalizes the selected result.
+specification; arithmetic then applies the missing rules from section 3.3.
 
 For a concrete operand `R`:
 
@@ -218,14 +244,15 @@ Unconfigured, convention C        + R = C + R
 Unconfigured, convention C        - R = C - R
 
 Unconfigured, missing convention  + R = R
-Unconfigured, missing convention  - R = empty
+Unconfigured, missing convention  - R = missing
 
 Configured(Missing), convention C + R = R
-Configured(Missing), convention C - R = empty
+Configured(Missing), convention C - R = missing
 ```
 
 The last case does not fall through to `C`. The explicit missing plan remains
-selected; this operation then normalizes its result to empty.
+selected. Addition returns the present right contribution, while subtraction
+remains missing because no left collection exists.
 
 An explicit empty collection is present and shadows the convention. A
 deprecated `set(null)` overload has the same semantics as `setMissing()` and
@@ -245,38 +272,41 @@ P -= R == P.set(P.minus(R))
 The canonical implementations delegate to the non-mutating operations:
 
 ```kotlin
-fun <C : Any, A : Any, S : Any> plusAssign(
+fun <C : Any, E : Any, S : Any> plusAssign(
     target: Property<C>,
-    right: A,
-    algebra: CollectionAlgebra<C, A, S>
+    right: C,
+    algebra: CollectionAlgebra<C, E, S>
 ) {
     target.set(plus(target, right, algebra))
 }
 
-fun <C : Any, A : Any, S : Any> plusAssign(
+fun <C : Any, E : Any, S : Any> plusAssign(
     target: Property<C>,
-    right: Provider<A>,
-    algebra: CollectionAlgebra<C, A, S>
+    right: Provider<C>,
+    algebra: CollectionAlgebra<C, E, S>
 ) {
     target.set(plus(target, right, algebra))
 }
 
-fun <C : Any, A : Any, S : Any> minusAssign(
+fun <C : Any, E : Any, S : Any> minusAssign(
     target: Property<C>,
     right: S,
-    algebra: CollectionAlgebra<C, A, S>
+    algebra: CollectionAlgebra<C, E, S>
 ) {
     target.set(minus(target, right, algebra))
 }
 
-fun <C : Any, A : Any, S : Any> minusAssign(
+fun <C : Any, E : Any, S : Any> minusAssign(
     target: Property<C>,
     right: Provider<S>,
-    algebra: CollectionAlgebra<C, A, S>
+    algebra: CollectionAlgebra<C, E, S>
 ) {
     target.set(minus(target, right, algebra))
 }
 ```
+
+Element and bulk compound overloads use the same pattern with `plusElement`
+and `plusAll` inside `target.set(...)`.
 
 The setter replaces each structural `PropertyRead(P)` on the right-hand side
 with the previous version of `P`. It does not realize a value during mutation.
@@ -284,8 +314,10 @@ Direct `plusAssign` and `minusAssign` methods may avoid constructing a temporary
 expression but must have identical semantics.
 
 If `P` is already configured, the operation uses its previous explicit plan.
-A previous missing plan is normalized to empty, and the convention remains
-shadowed.
+A previous missing plan plus a present right contribution produces that right
+contribution; if the right provider is also missing, addition remains missing.
+A previous missing plan minus any contribution remains missing. The convention
+remains shadowed in all cases.
 
 If `P` is unconfigured, the previous version is a live `ConventionRead(P)`:
 
@@ -343,7 +375,8 @@ File operations must:
 - not resolve symlinks merely to establish identity;
 - preserve left order and append new right identities in right order;
 - subtract only after both operands are expanded;
-- treat a missing contribution as an empty file set.
+- apply the same missing rules as other collections: addition combines any
+  present contributions, while subtraction requires a present left side.
 
 Directory notation denotes the directory itself. Recursive membership is
 introduced only by an explicit file-tree operand; subtraction must not silently
@@ -390,16 +423,27 @@ assertValue(
     linkedMapOf("a" to 1, "b" to 3, "c" to 4)
 )
 
-// Missing contributions use the empty identity.
+// Addition accumulates whichever contributions are present.
 assertValue(providerOf(listOf("a")) + Provider.missing(), listOf("a"))
 assertValue(Provider.missing<List<String>>() + listOf("b"), listOf("b"))
+assertMissing(
+    Provider.missing<List<String>>() + Provider.missing<List<String>>()
+)
 
-// Explicit missing shadows convention before arithmetic normalizes it.
+// Subtraction requires a present left side.
+assertValue(providerOf(listOf("a")) - Provider.missing(), listOf("a"))
+assertMissing(Provider.missing<List<String>>() - listOf("b"))
+assertMissing(
+    Provider.missing<List<String>>() - Provider.missing<List<String>>()
+)
+
+// Explicit missing shadows convention; addition may still use its right side.
 val p = listProperty<String>()
 p.convention(listOf("default"))
 p.setMissing()
 assertMissing(p)
 assertValue(p + listOf("user"), listOf("user"))
+assertMissing(p - listOf("user"))
 
 // An unconfigured compound assignment retains a live convention root.
 val q = listProperty<String>()
@@ -420,12 +464,15 @@ traversal.
 
 ```text
 plus/minus are derived from orElse + map/zip
-concrete operands use map
-provider operands normalize both sides and use zip
+concrete operands use map; addition uses orElse for a missing left side
+provider operands use zip and orElse without converting missing to empty
+element and bulk addition operands are lifted to collection values first
 ListProperty concatenates and removes matching values
 SetProperty uses insertion-ordered union and difference
 MapProperty uses right-biased merge and key subtraction
-missing becomes empty only inside collection arithmetic
+addition combines the contributions which are present
+addition is missing only when all contributions are missing
+subtraction requires a present left side and ignores a missing right side
 plus/minus do not mutate their source
 plusAssign/minusAssign use structural previous-version assignment
 an unconfigured compound assignment retains a live convention root

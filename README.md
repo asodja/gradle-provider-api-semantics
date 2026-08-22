@@ -35,7 +35,8 @@ semantics.
 Operations expressed from the foundational primitives:
 
 - `plus` and `minus` derived from `orElse`, `map`, and `zip`;
-- missing collection contributions normalized to the empty identity;
+- addition combines present contributions, while subtraction requires a
+  present left side;
 - `ListProperty` concatenation and value-removal;
 - `SetProperty` insertion-ordered union and difference;
 - `MapProperty` right-biased merge and key subtraction;
