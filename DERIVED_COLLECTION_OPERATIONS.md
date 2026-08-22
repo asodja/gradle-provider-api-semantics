@@ -278,14 +278,14 @@ require a fictitious empty value of type `E`.
 This is the complete rule for non-mutating arithmetic with a concrete right
 operand `R`:
 
-| Explicit slot | Convention slot | Selected result before normalization | `P + R` | `P - R` |
+| Explicit state | Convention plan | Selected result before normalization | `P + R` | `P - R` |
 |---|---|---|---|---|
-| present `V` | `C` | `V` | `V ⊕ R` | `V ⊖ R` |
-| present `V` | unset | `V` | `V ⊕ R` | `V ⊖ R` |
-| unset | present `C` | `C` | `C ⊕ R` | `C ⊖ R` |
-| unset | unset | missing | `R` | `empty` |
-| explicit provider missing | present `C` | missing | `R` | `empty` |
-| explicit `empty` | present `C` | `empty` | `R` | `empty` |
+| configured with `V` | `C` | `V` | `V ⊕ R` | `V ⊖ R` |
+| configured with `V` | missing | `V` | `V ⊕ R` | `V ⊖ R` |
+| unconfigured | `C` | `C` | `C ⊕ R` | `C ⊖ R` |
+| unconfigured | missing | missing | `R` | `empty` |
+| configured with missing provider | `C` | missing | `R` | `empty` |
+| configured with `empty` | `C` | `empty` | `R` | `empty` |
 
 An explicit missing provider does not fall through to the convention. It
 remains the selected source, and this particular derived operation then
@@ -293,7 +293,7 @@ normalizes its missing result to the empty identity.
 
 If a deprecated nullable setter is retained for compatibility, `set(null)` is
 another spelling of an explicit missing binding. It follows the same row; it
-does not unset the explicit slot or reveal the convention.
+does not return the property to `Unconfigured` or reveal the convention.
 
 ### 5.2 Provider operand
 
@@ -365,7 +365,7 @@ explicit missing; convention C; P -= R => empty
 
 ### 6.2 Convention-rooted assignment
 
-When no explicit binding exists, the previous version is a live
+When `P` is still unconfigured, the previous version is a live
 `ConventionRead(P)`:
 
 ```kotlin
@@ -394,7 +394,14 @@ p.convention(d)
 // Result: d ⊕ r
 ```
 
-`unset()` removes the complete explicit derived chain and reveals `d` directly.
+A later non-self `set` replaces the complete explicit derived chain. It does
+not reveal `d`:
+
+```kotlin
+p.set(x)
+
+// Result: x
+```
 
 ### 6.3 Compound-state table
 
@@ -402,10 +409,10 @@ p.convention(d)
 |---|---|---|
 | explicit `V`, convention `C` | `P += R` | `V ⊕ R` |
 | explicit `V`, convention `C` | `P -= R` | `V ⊖ R` |
-| no explicit, convention `C` | `P += R` | `C ⊕ R` |
-| no explicit, convention `C` | `P -= R` | `C ⊖ R` |
-| no explicit, no convention | `P += R` | `R` |
-| no explicit, no convention | `P -= R` | `empty` |
+| unconfigured, convention `C` | `P += R` | `C ⊕ R` |
+| unconfigured, convention `C` | `P -= R` | `C ⊖ R` |
+| unconfigured, missing convention | `P += R` | `R` |
+| unconfigured, missing convention | `P -= R` | `empty` |
 | explicit provider missing, convention `C` | `P += R` | `R` |
 | explicit provider missing, convention `C` | `P -= R` | `empty` |
 
@@ -466,7 +473,7 @@ missing + {b: 2} = {b: 2}
 ```text
 P.convention([a])      P + [b] = [a, b]
 P.set(empty)           P + [b] = [b]
-P.unset()              P + [b] = [a, b]
+P.convention([z])      P + [b] = [b]
 P.set(missingProvider) P + [b] = [b]
 ```
 
@@ -578,16 +585,19 @@ assertValue(p + listOf("b"), listOf("b"))
 assertValue(providerOf(listOf("a")) + Provider.missing(), listOf("a"))
 assertValue(Provider.missing<List<String>>() + listOf("b"), listOf("b"))
 
-// Compound assignment uses structural previous-version substitution.
-p.unset()
-p += listOf("b")
-assertValue(p, listOf("a", "b"))
+// Compound assignment on an unconfigured property uses its convention root.
+val q = listProperty<String>()
+q.convention(listOf("a"))
+q += listOf("b")
+assertValue(q, listOf("a", "b"))
 
 // A convention replacement remains live through a convention-rooted chain.
-p.convention(listOf("z"))
-assertValue(p, listOf("z", "b"))
-p.unset()
-assertValue(p, listOf("z"))
+q.convention(listOf("z"))
+assertValue(q, listOf("z", "b"))
+
+// A non-self set cuts the chain without revealing the convention.
+q.set(Provider.missing())
+assertMissing(q)
 
 // Missing contributions do not erase accumulated values.
 val accumulated = listProperty<String>()

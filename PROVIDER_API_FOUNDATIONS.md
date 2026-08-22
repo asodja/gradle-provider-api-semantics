@@ -27,7 +27,7 @@ Provider<T> = a computation that produces Present<T> or Missing
 A property is a mutable binding that is also readable as a provider:
 
 ```text
-Property<T> = explicit binding + convention binding + lifecycle state
+Property<T> = monotonic explicit state + convention plan + lifecycle state
 ```
 
 A property does not store `null`. Its provider result is either a present,
@@ -52,11 +52,10 @@ interface Provider<out T : Any> {
 interface Property<T : Any> : Provider<T> {
     fun set(value: T)
     fun set(provider: Provider<T>)
-    fun unset()
+    fun setMissing()
 
     fun convention(value: T)
     fun convention(provider: Provider<T>)
-    fun unsetConvention()
 
     fun finalizeValue()
     fun disallowChanges()
@@ -67,7 +66,7 @@ Deprecated nullable overloads may temporarily exist at an interoperability
 boundary. Their meaning is defined in section 5; null never becomes a property
 value.
 
-## 2. Values, slots, and selection
+## 2. Values, states, and selection
 
 The following states are deliberately different:
 
@@ -75,27 +74,33 @@ The following states are deliberately different:
 |---|---|
 | present | A provider produced a non-null value. |
 | missing | A provider produced no value. |
-| unset | A property slot has no binding. |
+| unconfigured | No explicit binding has ever been installed. |
 | null | An invalid value; legacy nullable setters may translate it to an explicit missing binding. |
 | empty | A present collection containing no elements. |
 
-A property has two binding slots:
+A property has a monotonic explicit state and a convention plan:
 
 ```text
-explicit slot:   unset | Provider<T>
-convention slot: unset | Provider<T>
+explicit:   Unconfigured | Configured(Provider<T>)
+convention: Provider<T>, initially Missing(NoConvention)
 ```
 
-It selects a binding before evaluating that binding:
+It selects a plan before evaluating that plan:
 
 ```text
 selectedPlan(P) =
-    explicit plan,   when the explicit slot is set
-    convention plan, when the explicit slot is unset and convention is set
-    missing plan,    otherwise
+    explicit plan,   when explicit is Configured
+    convention plan, when explicit is Unconfigured
 ```
 
-This selection rule is the foundation of all other operations.
+The first `set` changes `Unconfigured` to `Configured`. Later `set` calls may
+replace the explicit plan, including with a missing plan, but no operation
+changes the property back to `Unconfigured`.
+
+This one-way transition is the foundation of all other operations. In
+particular, missing and unconfigured are different: a configured missing plan
+shadows the convention permanently, while an unconfigured property selects the
+convention.
 
 ## 3. Convention
 
@@ -143,7 +148,7 @@ does not configure the property, the result is `"foo"`.
 
 A convention is therefore not an imperative “set this value only if the
 property happens to be empty right now” operation. It writes a separate,
-lower-priority slot. The property continuously applies the priority rule
+lower-priority plan. The property continuously applies the priority rule
 “explicit, otherwise convention,” independently of callback timing.
 
 A convention:
@@ -152,14 +157,15 @@ A convention:
 - remains lazy when supplied by a provider;
 - is retained while shadowed by an explicit binding;
 - is replaceable while shadowed;
-- is selected only when the explicit slot is unset;
+- is selected only while the explicit state is `Unconfigured`;
 - is not an `orElse` fallback for an explicit provider that evaluates missing.
 
 The self-reference extension can install an explicit plan that deliberately
 contains `ConventionRead(P)` because no explicit binding existed before that
-assignment. In that case the convention is an input of the selected explicit
-plan; the property has not fallen through from an explicit missing result. The
-separate self-reference specification defines this extension.
+assignment—that is, the property was still unconfigured. In that case the
+convention is an input of the selected explicit plan; the property has not
+fallen through from an explicit missing result. The separate self-reference
+specification defines this extension.
 
 ### 3.2 Selection happens before evaluation
 
@@ -182,26 +188,26 @@ property.set(source.orElse(providerOf("fallback")))
 
 ### 3.3 Binding-state table
 
-`C` and `D` are conventions, `V` is an explicit value, and `Q` is an explicit
-provider:
+`C` and `D` are conventions, `V` and `W` are explicit values, and `Q` is an
+explicit provider:
 
 | Operations, in order | Selected binding | Observed result |
 |---|---|---|
-| none | missing plan | missing |
+| none | initial missing convention plan | missing |
 | `convention(C)` | convention `C` | result of `C` |
 | `convention(C); set(V)` | explicit `V` | `V` |
 | `set(V); convention(C)` | explicit `V` | `V` |
 | `convention(C); set(Q)` | explicit `Q` | result of `Q` |
 | `convention(C); set(missingProvider)` | explicit missing provider | missing |
 | `convention(C); set(null)` (deprecated) | explicit missing plan | missing |
-| previous row, then `unset()` | convention `C` | result of `C` |
-| `convention(C); set(V); unset()` | convention `C` | result of `C` |
+| previous row, then `set(W)` | explicit `W` | `W` |
 | `convention(C); set(V); convention(D)` | explicit `V` | `V` |
-| previous row, then `unset()` | convention `D` | result of `D` |
-| `convention(C); unsetConvention()` | missing plan | missing |
+| `convention(C); convention(missingProvider)` | missing convention | missing |
 
-`set` changes only the explicit slot. `convention` changes only the convention
-slot. Neither operation silently deletes the other slot.
+`set` changes only the explicit plan and permanently marks the property as
+configured. `convention` changes only the convention plan. Neither operation
+silently deletes the other plan, and an ordinary explicit binding can never
+fall back to the convention.
 
 ## 4. Primitive provider operations
 
@@ -292,7 +298,7 @@ P.orElse(Q) =
 This is deliberately different from a convention:
 
 ```text
-convention: choose a source because the explicit slot is unset
+convention: choose a source because the property is still unconfigured
 orElse:     choose a result because the primary source evaluated missing
 ```
 
@@ -312,8 +318,11 @@ upper.get() // "A"
 property.set("b")
 upper.get() // "B"
 
-property.unset()
-upper.get() // "A"
+property.convention("c")
+upper.get() // "B"; the property remains explicitly configured
+
+property.setMissing()
+upper.isPresent() // false; the convention does not reappear
 ```
 
 The derived provider is not given a separate copy of the convention. It reads
@@ -324,8 +333,8 @@ When the explicit provider is missing, primitive operations remain strict:
 | Property state | `map` | `flatMap` | `zip(present)` | `orElse(F)` |
 |---|---|---|---|---|
 | explicit `V`, convention `C` | transform `V` | select from `V` | combine `V` | `V` |
-| unset, convention `C` | transform `C` | select from `C` | combine `C` | `C` |
-| unset, no convention | missing | missing | missing | result of `F` |
+| unconfigured, convention `C` | transform `C` | select from `C` | combine `C` | `C` |
+| unconfigured, missing convention | missing | missing | missing | result of `F` |
 | explicit provider missing, convention `C` | missing | missing | missing | result of `F` |
 
 ## 5. Binding operations and null
@@ -333,28 +342,34 @@ When the explicit provider is missing, primitive operations remain strict:
 The binding operations are:
 
 ```text
-set(value/provider)          replace the explicit binding
-unset()                      remove the explicit binding
-convention(value/provider)   replace the convention binding
-unsetConvention()            remove the convention binding
+set(value/provider)          configure or replace the explicit plan
+setMissing()                 configure an explicit missing plan
+convention(value/provider)   replace the convention plan
 ```
 
-Named removal operations are canonical. They distinguish a missing provider
-from an unset property slot.
+There is no operation which returns a configured property to `Unconfigured`.
+Once a property has received any explicit `set`, every later state is also
+explicitly configured. A non-self `set` still replaces the previous plan and
+allows it to be reclaimed; monotonic configuration does not mean that the
+value itself is immutable.
+
+The convention plan is initially missing. Replacing it with a missing provider
+has the same observable result as having no convention, so a separate
+`unsetConvention()` operation is unnecessary.
 
 New APIs should not accept null in binding operations. If legacy nullable
 overloads must remain temporarily, they should be deprecated and translated at
 the API boundary as follows:
 
 ```text
-set(null)        == set(Provider.missing())
+set(null)        == setMissing() == set(Provider.missing())
 convention(null) == convention(Provider.missing())
 ```
 
-`set(null)` is therefore an explicit choice which shadows a convention. Only
-`unset()` removes that choice and reveals the convention again. Treating
-`set(null)` as `unset()` is broken behavior because it changes the selected
-source rather than representing the user's explicit assignment.
+`set(null)` is therefore an explicit choice which shadows a convention
+permanently, until another explicit plan replaces it. Treating `set(null)` as
+removal is broken behavior because it changes the selected source rather than
+representing the user's explicit assignment.
 
 The compatibility boundary creates a `Missing` plan; null itself must not
 enter the provider graph or become a present value. A transform, collection
@@ -379,7 +394,8 @@ at the observation boundary.
 
 A missing result should carry a reason or path. Diagnostics should distinguish:
 
-- no explicit or convention binding;
+- an unconfigured property whose convention plan is missing;
+- an explicitly configured missing plan;
 - a selected provider that evaluated missing;
 - a missing input to `map`, `flatMap`, or `zip`;
 - a cycle;
@@ -408,9 +424,9 @@ computation:
 
 ```text
                               +------------------+
-explicit slot -------------->|                  |
+explicit state ------------->|                  |
                               | selection node   |----> effective Provider<T>
-convention slot ------------>|                  |
+convention plan ------------>|                  |
                               +------------------+
                                        |
                                        v
@@ -421,11 +437,15 @@ convention slot ------------>|                  |
 A property cell contains:
 
 ```text
-explicitPlan:   unset | ProviderNode<T>
-conventionPlan: unset | ProviderNode<T>
+explicitState:  Unconfigured | Configured(ProviderNode<T>)
+conventionPlan: ProviderNode<T> = Missing(NoConvention)
 lifecycle:      mutable | changesDisallowed | finalized
 revision:       monotonically increasing identifier
 ```
+
+`Configured` is monotonic. A `set` may replace its node but cannot restore the
+`Unconfigured` variant. This lets selection test one stable state bit rather
+than interpret a missing provider result as absence of configuration.
 
 Provider nodes include:
 
@@ -451,42 +471,45 @@ quadratic memory growth.
 ## 9. Minimum conformance examples
 
 ```kotlin
-// Convention supplies the value while explicit is unset.
+// Convention supplies the value while the property is unconfigured.
 val p = property<String>()
 p.convention("default")
 assertValue(p, "default")
 
-// Explicit value shadows but does not delete the convention.
+// The first explicit set permanently configures the property.
 p.set("explicit")
 assertValue(p, "explicit")
-p.unset()
-assertValue(p, "default")
 
-// A later convention is retained while explicit remains selected.
-p.set("explicit")
+// Replacing the convention cannot make it reappear through ordinary selection.
 p.convention("new default")
 assertValue(p, "explicit")
-p.unset()
-assertValue(p, "new default")
 
 // An explicit missing provider does not fall through to convention.
 p.set(Provider.missing())
 assertMissing(p)
+p.convention("another default")
+assertMissing(p)
+
+// A later explicit value replaces the missing plan.
+p.set("later")
+assertValue(p, "later")
 
 // A deprecated nullable setter has the same explicit-missing semantics.
 p.set(null)
 assertMissing(p)
-p.unset()
-assertValue(p, "new default")
+p.set("recovered")
+assertValue(p, "recovered")
 
 // orElse is explicit fallback-after-missing.
 assertValue(Provider.missing<String>().orElse(providerOf("fallback")), "fallback")
 
 // map observes the selected binding lazily.
-val mapped = p.map { it.uppercase() }
-assertValue(mapped, "NEW DEFAULT")
-p.set("later")
-assertValue(mapped, "LATER")
+val q = property<String>()
+q.convention("default")
+val mapped = q.map { it.uppercase() }
+assertValue(mapped, "DEFAULT")
+q.set("explicit")
+assertValue(mapped, "EXPLICIT")
 
 // Raw zip is missing-preserving.
 assertMissing(
@@ -500,20 +523,49 @@ list.set(emptyList())
 assertValue(list, emptyList())
 ```
 
-## 10. Design summary
+## 10. Behavior deliberately discarded from the current API
+
+This specification is a redesign, not a compatibility description. Gradle's
+[current `Property` API](https://docs.gradle.org/current/javadoc/org/gradle/api/provider/Property.html)
+allows `set(null)` and `value(null)` to discard the explicit value so that the
+convention becomes selected. Its
+[`SupportsConvention` API](https://docs.gradle.org/current/javadoc/org/gradle/api/provider/SupportsConvention.html)
+also exposes `unset()` and `unsetConvention()`.
+
+This design deliberately discards those behaviors:
+
+| Current-style behavior | New design |
+|---|---|
+| `set(null)` or `value(null)` removes the explicit binding | Deprecated compatibility spelling for `setMissing()` |
+| `unset()` returns a property to its never-configured state | No equivalent; explicit configuration is monotonic |
+| Clearing an explicit value reveals a convention | A convention never reappears through ordinary selection after `set` |
+| `convention(null)` or `unsetConvention()` removes a convention slot | Replace the convention plan with `Provider.missing()` |
+| Nullable binding overloads are normal configuration operations | New APIs reject null; compatibility overloads are deprecated |
+
+There is intentionally no hidden replacement for “reset to convention.” A
+caller that wants a particular value or provider must set that source
+explicitly. The design retains ordinary explicit replacement, explicit missing
+plans, convention replacement, and lifecycle finalization.
+
+This trade-off removes reversible binding-selection state and prevents an old,
+shadowed convention from unexpectedly becoming observable again.
+
+## 11. Design summary
 
 ```text
-Property is a mutable explicit/convention binding and also a Provider
-selection chooses explicit, then convention, then missing
+Property is a mutable binding and also a Provider
+explicit state moves once from Unconfigured to Configured
+selection chooses convention only while explicit is Unconfigured
 selection occurs before provider evaluation
-set replaces only the explicit slot
-unset removes only the explicit slot
-convention replaces only the convention slot
+set configures or replaces the explicit plan
+setMissing installs an explicit missing plan
+there is no unset operation and conventions do not reappear through selection
+convention replaces the convention plan
 an explicit missing provider does not fall through to convention
 map and flatMap transform one present source
 zip combines two present sources
 orElse is the explicit fallback-after-missing operation
-deprecated set(null) installs an explicit missing plan; it does not unset
+deprecated set(null) is another spelling of setMissing
 null is never a property value
 ```
 

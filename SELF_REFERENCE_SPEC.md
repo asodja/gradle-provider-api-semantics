@@ -42,8 +42,8 @@ plans:
 
 ```text
 PropertyCell<T>:
-    explicitHead:   unset | Plan<T>
-    conventionSlot: unset | Plan<T>
+    explicitState:  Unconfigured | Configured(Plan<T>)
+    conventionPlan: Plan<T> = Missing(NoConvention)
     lifecycle:      mutable | changesDisallowed | finalized
     revision:       monotonically increasing identifier
 ```
@@ -63,8 +63,8 @@ Fixed(result)
 ```
 
 `PropertyRead(P)` reads the effective current plan of `P`.
-`ConventionRead(P)` reads only `P`'s convention slot and never selects its
-explicit head. These nodes are structurally visible to the implementation.
+`ConventionRead(P)` reads only `P`'s convention plan and never selects its
+explicit plan. These nodes are structurally visible to the implementation.
 Property reads hidden inside an opaque callback are not structural reads.
 
 A **version** is an immutable plan selected as the meaning of a property at a
@@ -79,7 +79,7 @@ When the right-hand plan contains no structural read of the target property,
 
 ```text
 P.set(Q), where Q cannot read P:
-    P.explicitHead = Q
+    P.explicitState = Configured(Q)
 ```
 
 The previous explicit plan is not retained by `P`. It may be reclaimed when no
@@ -93,11 +93,13 @@ right-hand plan:
 
 ```text
 previous(P) =
-    P.explicitHead, when the explicit slot is set
-    ConventionRead(P), otherwise
+    explicit plan,     when P is Configured
+    ConventionRead(P), when P is Unconfigured
 
 P.set(Q), where Q structurally reads P:
-    P.explicitHead = substitute(Q, PropertyRead(P), previous(P))
+    P.explicitState = Configured(
+        substitute(Q, PropertyRead(P), previous(P))
+    )
 ```
 
 This is static single-assignment notation for the same rule:
@@ -145,7 +147,7 @@ is equivalent to:
 
 ```text
 old = previous(P)
-P.explicitHead = Zip(old, old, combine)
+P.explicitState = Configured(Zip(old, old, combine))
 ```
 
 The old plan may be evaluated once per evaluation session and shared by both
@@ -193,9 +195,9 @@ primitive.
 
 ## 4. Convention interaction
 
-When `P` has no explicit head, a structural self-reference is substituted with
-`ConventionRead(P)` rather than a snapshot of the convention slot's current
-plan.
+When `P` is unconfigured, a structural self-reference is substituted with
+`ConventionRead(P)` rather than a snapshot of the convention plan's current
+value.
 This preserves the ordering independence for which conventions exist:
 
 ```kotlin
@@ -240,17 +242,18 @@ p.set(Provider.missing())
 If a self-assignment follows that explicit missing provider, its previous
 version is the explicit missing provider, not the convention.
 
-`unset()` discards the complete explicit head, including any self-derived
-chain, and exposes the current convention directly. `unsetConvention()` clears
-the convention slot. A self-derived chain rooted at `ConventionRead(P)` then
-becomes missing unless one of its operations explicitly supplies an `orElse`
-value.
+A non-self `set` discards the complete previous explicit plan, including any
+self-derived chain, and installs another configured plan. It never returns the
+property to `Unconfigured` or reveals the convention through ordinary
+selection. Replacing the convention with `Provider.missing()` makes a
+self-derived chain rooted at `ConventionRead(P)` missing unless one of its
+operations explicitly supplies an `orElse` value.
 
 ## 5. Binding algorithm
 
 Conceptually, `set` uses a compare-and-set loop or an equivalent property-local
 lock. A cached structural dependency summary allows the common non-self case to
-replace the head without traversing or retaining the old plan:
+replace the explicit plan without traversing or retaining the old plan:
 
 ```kotlin
 fun set(rhs: Plan<T>) {
@@ -258,11 +261,13 @@ fun set(rhs: Plan<T>) {
         val oldState = state.get()
         oldState.requireMutable()
 
-        val newHead = when {
+        val newPlan = when {
             !rhs.structurallyReads(propertyId) -> rhs
             else -> {
-                val previous = oldState.explicitHead
-                    ?: ConventionRead(propertyId)
+                val previous = when (val explicit = oldState.explicitState) {
+                    is Configured -> explicit.plan
+                    Unconfigured -> ConventionRead(propertyId)
+                }
                 substitute(
                     rhs,
                     PropertyRead(propertyId),
@@ -272,7 +277,7 @@ fun set(rhs: Plan<T>) {
         }
 
         val newState = oldState.copy(
-            explicitHead = newHead,
+            explicitState = Configured(newPlan),
             revision = oldState.revision + 1
         )
         if (state.compareAndSet(oldState, newState)) return
@@ -361,7 +366,7 @@ eligible for previous-version substitution.
 ## 8. Lifecycle and concurrency
 
 - Creating a right-hand provider does not mutate or finalize its sources.
-- Substitution and installation of the new explicit head are one atomic
+- Substitution and installation of the new explicit plan are one atomic
   mutation.
 - One evaluation observes one coherent property revision.
 - `disallowChanges()` rejects the assignment before installing a plan.
@@ -381,7 +386,7 @@ With cached structural dependency summaries and memoized path copying:
 | Non-self `set` | `O(1)` |
 | Direct `P.set(P.map(f))` | `O(1)` |
 | General structural self-reference | `O(nodes on RHS paths to P)` |
-| `unset` or convention replacement | `O(1)` |
+| Convention replacement | `O(1)` |
 | Evaluation | `O(live plan nodes + value-operation cost)` |
 
 The CAS loop may retry under concurrent mutation, but each attempt performs no
@@ -437,9 +442,10 @@ p.set(q.map(g)) // does not read p; the a -> f chain is reclaimable
 `q.map(g)` remains live with respect to `q`, but it has no reason to retain an
 old version of `p`.
 
-`unset()` also cuts the explicit chain. `finalizeValue()` may collapse it to a
-fixed result. External providers can independently keep old plans alive; that
-is normal provider-DAG reachability rather than property history.
+`setMissing()` is an ordinary non-self replacement and also cuts the explicit
+chain. `finalizeValue()` may collapse a chain to a fixed result. External
+providers can independently keep old plans alive; that is normal provider-DAG
+reachability rather than property history.
 
 An opaque provider never causes conservative retention. If it hides a read of
 the target property, evaluation rejects that read as a cycle.
@@ -450,7 +456,7 @@ Let:
 
 ```text
 N = number of live self-referential assignments since the last chain-cutting
-    set, unset, or finalization
+    non-self set or finalization
 R = number of distinct right-hand provider nodes retained by those assignments
 C = memory retained by closures, constant values, origins, and provider inputs
 ```
@@ -582,13 +588,13 @@ assertCycle { opaque.get() }
 
 ```text
 ordinary set:
-    replace the explicit head and retain no property history
+    configure or replace the explicit plan and retain no property history
 
 self-referential set:
-    bind target reads to the previous immutable plan and install a new head
+    bind target reads to the previous immutable plan and install a new plan
 
-no prior explicit head:
-    bind target reads to the live convention slot
+unconfigured target:
+    bind target reads to the live convention plan
 
 structurally non-self RHS:
     no substitution and no old-plan retention
@@ -599,7 +605,7 @@ structurally self-referential RHS:
 opaque self-reference:
     do not retain the old plan; report a normal cycle when evaluated
 
-later non-self set, unset, or finalization:
+later non-self set or finalization:
     cut or collapse the retained chain
 ```
 

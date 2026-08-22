@@ -11,9 +11,12 @@ Gradle's current implementation or compatibility constraints.
 The basic semantic model:
 
 - what `Provider<T>` and `Property<T>` represent;
-- present, missing, unset, null, and empty;
-- explicit and convention binding slots;
-- how `set`, `unset`, `convention`, and `unsetConvention` interact;
+- present, missing, unconfigured, null, and empty;
+- explicit configuration state and the convention plan;
+- monotonic explicit configuration through `set` and `setMissing`;
+- convention replacement without `unset` or resurrection through ordinary
+  selection;
+- behavior deliberately discarded from Gradle's current API;
 - why an explicit missing provider does not fall through to a convention;
 - primitive `map`, `flatMap`, `zip`, and `orElse` operations;
 - observation, lifecycle, diagnostics, and the base implementation model.
@@ -44,7 +47,7 @@ Previous-version assignment and its implementation:
 
 - why `P.set(P.map(f))` can mean `P1 = f(P0)` without a cycle;
 - structurally inspectable self-references;
-- live convention roots when no explicit binding existed;
+- live convention roots when the target was still unconfigured;
 - opaque self-references that remain ordinary cycles;
 - atomic substitution, lifecycle, performance, and memory retention;
 - why non-self replacement cuts a previous self-derived chain.
