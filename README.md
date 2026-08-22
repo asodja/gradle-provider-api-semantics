@@ -4,6 +4,12 @@ This repository contains a semantic design for a new lazy Provider and Property
 API. It focuses on rules programmers can predict from the API rather than on
 Gradle's current implementation or compatibility constraints.
 
+## Contents
+
+- [Documents](#documents)
+- [Reading order](#reading-order)
+- [Shared design principles](#shared-design-principles)
+
 ## Documents
 
 ### [Provider API Foundations](PROVIDER_API_FOUNDATIONS.md)

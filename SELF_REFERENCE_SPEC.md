@@ -21,6 +21,21 @@ assignment.
 
 The words **must**, **must not**, **should**, and **may** are normative.
 
+## Contents
+
+- [1. Goals](#1-goals)
+- [2. Model and terminology](#2-model-and-terminology)
+- [3. Assignment semantics](#3-assignment-semantics)
+- [4. Convention interaction](#4-convention-interaction)
+- [5. Binding algorithm](#5-binding-algorithm)
+- [6. Structural dependency classification](#6-structural-dependency-classification)
+- [7. Cycle rules](#7-cycle-rules)
+- [8. Lifecycle and concurrency](#8-lifecycle-and-concurrency)
+- [9. Performance and memory](#9-performance-and-memory)
+- [10. Supported implementation boundary](#10-supported-implementation-boundary)
+- [11. Minimum conformance examples](#11-minimum-conformance-examples)
+- [12. Design summary](#12-design-summary)
+
 ## 1. Goals
 
 Self-referential assignment must:

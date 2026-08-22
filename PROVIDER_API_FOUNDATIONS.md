@@ -16,6 +16,20 @@ Previous-version assignment is specified separately in
 
 The words **must**, **must not**, **should**, and **may** are normative.
 
+## Contents
+
+- [1. Provider and Property](#1-provider-and-property)
+- [2. Values, states, and selection](#2-values-states-and-selection)
+- [3. Convention](#3-convention)
+- [4. Primitive provider operations](#4-primitive-provider-operations)
+- [5. Binding operations and null](#5-binding-operations-and-null)
+- [6. Observation and missing values](#6-observation-and-missing-values)
+- [7. Lifecycle](#7-lifecycle)
+- [8. Implementation model](#8-implementation-model)
+- [9. Minimum conformance examples](#9-minimum-conformance-examples)
+- [10. Behavior deliberately discarded from the current API](#10-behavior-deliberately-discarded-from-the-current-api)
+- [11. Design summary](#11-design-summary)
+
 ## 1. Provider and Property
 
 A provider is a lazy, read-only computation:

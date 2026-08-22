@@ -18,6 +18,18 @@ not another property or convention model.
 
 The words **must**, **must not**, **should**, and **may** are normative.
 
+## Contents
+
+- [1. Vocabulary](#1-vocabulary)
+- [2. Collection algebra](#2-collection-algebra)
+- [3. Definition from primitive operations](#3-definition-from-primitive-operations)
+- [4. Property selection and convention](#4-property-selection-and-convention)
+- [5. Compound assignment](#5-compound-assignment)
+- [6. Configurable file collections](#6-configurable-file-collections)
+- [7. Lifecycle and implementation requirements](#7-lifecycle-and-implementation-requirements)
+- [8. Minimum conformance examples](#8-minimum-conformance-examples)
+- [9. Summary](#9-summary)
+
 ## 1. Vocabulary
 
 Derivation and mutation are different operations:
