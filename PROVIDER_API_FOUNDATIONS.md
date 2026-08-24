@@ -9,6 +9,12 @@ with explicit bindings, and how the primitive provider operations behave.
 It is a design for a new implementation. It does not describe Gradle's current
 implementation and is not a compatibility promise.
 
+This version of the specification makes no concurrency guarantees for
+`Property`. Its requirements apply when property access is not concurrent.
+Thread safety, atomicity, visibility, and ordering between concurrent reads,
+mutations, or lifecycle operations remain unspecified until the `Property`
+concurrency contract is defined.
+
 Operations built from this core, including collection `plus` and `minus`, are
 specified in [Derived Collection Operations](DERIVED_COLLECTION_OPERATIONS.md).
 Previous-version assignment is specified separately in
@@ -428,8 +434,8 @@ Lifecycle operations apply to the mutable property cell:
 - finalization may replace a provider plan with a fixed result and release
   provider nodes that are no longer externally referenced.
 
-One evaluation must observe one coherent property revision. Provider evaluation
-occurs outside the property mutation lock.
+This lifecycle model does not define interactions between concurrent
+evaluation, mutation, or lifecycle operations.
 
 ## 8. Implementation model
 
@@ -454,7 +460,6 @@ A property cell contains:
 explicitState:  Unconfigured | Configured(ProviderNode<T>)
 conventionPlan: ProviderNode<T> = Missing(NoConvention)
 lifecycle:      mutable | changesDisallowed | finalized
-revision:       monotonically increasing identifier
 ```
 
 `Configured` is monotonic. A `set` may replace its node but cannot restore the

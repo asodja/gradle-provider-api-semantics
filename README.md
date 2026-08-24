@@ -56,7 +56,7 @@ Previous-version assignment and its implementation:
 - structurally inspectable self-references;
 - live convention roots when the target was still unconfigured;
 - opaque self-references that remain ordinary cycles;
-- atomic substitution, lifecycle, performance, and memory retention;
+- substitution, lifecycle, performance, and memory retention;
 - why non-self replacement cuts a previous self-derived chain.
 
 ## Reading order
@@ -78,6 +78,7 @@ except that compound collection assignment uses the self-reference rule.
 
 Across all documents:
 
+- these specification versions make no concurrency guarantees for `Property`;
 - property selection happens before provider evaluation;
 - conventions resolve configuration priority, not missing provider results;
 - missing is a state and null is not a value;

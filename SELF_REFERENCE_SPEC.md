@@ -7,6 +7,12 @@ implementation. It builds on [Provider API Foundations](PROVIDER_API_FOUNDATIONS
 but can be implemented separately from
 [Derived Collection Operations](DERIVED_COLLECTION_OPERATIONS.md).
 
+This version of the specification makes no concurrency guarantees for
+`Property`. Its requirements apply when property access is not concurrent.
+Thread safety, atomicity, visibility, and ordering between concurrent reads,
+mutations, or lifecycle operations remain unspecified until the `Property`
+concurrency contract is defined.
+
 The feature allows assignment-shaped expressions such as:
 
 ```kotlin
@@ -30,7 +36,7 @@ The words **must**, **must not**, **should**, and **may** are normative.
 - [5. Binding algorithm](#5-binding-algorithm)
 - [6. Structural dependency classification](#6-structural-dependency-classification)
 - [7. Cycle rules](#7-cycle-rules)
-- [8. Lifecycle and concurrency](#8-lifecycle-and-concurrency)
+- [8. Lifecycle and concurrency scope](#8-lifecycle-and-concurrency-scope)
 - [9. Performance and memory](#9-performance-and-memory)
 - [10. Supported implementation boundary](#10-supported-implementation-boundary)
 - [11. Minimum conformance examples](#11-minimum-conformance-examples)
@@ -42,10 +48,9 @@ Self-referential assignment must:
 
 1. have the familiar meaning of `x = f(x)`, where the right-hand `x` is old;
 2. remain lazy and preserve provider dependencies and missing values;
-3. be atomic with respect to other mutations of the target property;
-4. compose with a convention installed before or after the assignment;
-5. retain only history that the current provider graph can still observe;
-6. diagnose cycles that are not broken by the assignment's old-value rule.
+3. compose with a convention installed before or after the assignment;
+4. retain only history that the current provider graph can still observe;
+5. diagnose cycles that are not broken by the assignment's old-value rule.
 
 It must not eagerly read the property, guess a fixed point, or depend on stack
 overflow to detect a cycle.
@@ -60,7 +65,6 @@ PropertyCell<T>:
     explicitState:  Unconfigured | Configured(Plan<T>)
     conventionPlan: Plan<T> = Missing(NoConvention)
     lifecycle:      mutable | changesDisallowed | finalized
-    revision:       monotonically increasing identifier
 ```
 
 Relevant immutable plan nodes are:
@@ -102,9 +106,8 @@ other provider references it.
 
 ### 3.2 Self-referential assignment
 
-When the right-hand plan structurally reads `P`, `set` atomically captures the
-plan to use for right-hand reads and substitutes it into a path-copied
-right-hand plan:
+When the right-hand plan structurally reads `P`, `set` captures the plan to use
+for right-hand reads and substitutes it into a path-copied right-hand plan:
 
 ```text
 previous(P) =
@@ -266,43 +269,36 @@ operations explicitly supplies an `orElse` value.
 
 ## 5. Binding algorithm
 
-Conceptually, `set` uses a compare-and-set loop or an equivalent property-local
-lock. A cached structural dependency summary allows the common non-self case to
-replace the explicit plan without traversing or retaining the old plan:
+Conceptually, `set` performs the following sequential state transition. A
+cached structural dependency summary allows the common non-self case to replace
+the explicit plan without traversing or retaining the old plan:
 
 ```kotlin
 fun set(rhs: Plan<T>) {
-    while (true) {
-        val oldState = state.get()
-        oldState.requireMutable()
+    val oldState = state
+    oldState.requireMutable()
 
-        val newPlan = when {
-            !rhs.structurallyReads(propertyId) -> rhs
-            else -> {
-                val previous = when (val explicit = oldState.explicitState) {
-                    is Configured -> explicit.plan
-                    Unconfigured -> ConventionRead(propertyId)
-                }
-                substitute(
-                    rhs,
-                    PropertyRead(propertyId),
-                    previous
-                )
+    val newPlan = when {
+        !rhs.structurallyReads(propertyId) -> rhs
+        else -> {
+            val previous = when (val explicit = oldState.explicitState) {
+                is Configured -> explicit.plan
+                Unconfigured -> ConventionRead(propertyId)
             }
+            substitute(
+                rhs,
+                PropertyRead(propertyId),
+                previous
+            )
         }
-
-        val newState = oldState.copy(
-            explicitState = Configured(newPlan),
-            revision = oldState.revision + 1
-        )
-        if (state.compareAndSet(oldState, newState)) return
     }
+
+    state = oldState.copy(explicitState = Configured(newPlan))
 }
 ```
 
-The old plan is captured only after the mutation has acquired a coherent old
-state. A failed compare-and-set attempt must rebuild the substitution against
-the newly observed state.
+This algorithm defines only the result of a non-concurrent call. It does not
+require a lock, compare-and-set loop, or any other concurrency mechanism.
 
 `substitute` traverses only structurally inspectable plan nodes. It must use an
 identity memo so that a shared input is copied at most once and remains shared
@@ -378,17 +374,19 @@ Cycle detection must track property identity and plan identity. A diagnostic
 should show the new binding and explain that opaque self-reference is not
 eligible for previous-version substitution.
 
-## 8. Lifecycle and concurrency
+## 8. Lifecycle and concurrency scope
 
 - Creating a right-hand provider does not mutate or finalize its sources.
-- Substitution and installation of the new explicit plan are one atomic
-  mutation.
-- One evaluation observes one coherent property revision.
 - `disallowChanges()` rejects the assignment before installing a plan.
 - `finalizeValue()` evaluates the selected plan according to the lifecycle
   contract and may replace the complete chain with one `Fixed(result)` node.
 - After finalization, previous plans, transforms, and provider operands may be
   reclaimed when no external provider references them.
+
+These rules describe non-concurrent use only. This version specifies no
+atomicity, visibility, ordering, coherent-snapshot, or thread-safety guarantees
+when evaluation, mutation, or lifecycle operations overlap. An implementation
+may provide stronger guarantees, but they are not part of this specification.
 
 ## 9. Performance and memory
 
@@ -404,8 +402,7 @@ With cached structural dependency summaries and memoized path copying:
 | Convention replacement | `O(1)` |
 | Evaluation | `O(live plan nodes + value-operation cost)` |
 
-The CAS loop may retry under concurrent mutation, but each attempt performs no
-provider realization.
+Constructing and installing a new plan performs no provider realization.
 
 An evaluator must not use one JVM or native call-stack frame per chained plan
 node. It should interpret long chains iteratively, flatten compatible map

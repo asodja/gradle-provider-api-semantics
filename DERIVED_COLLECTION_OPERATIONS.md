@@ -6,6 +6,12 @@ This document defines collection operations built from the primitive Provider
 API. It specifies `plus` and `minus` for `ListProperty`, `SetProperty`, and
 `MapProperty`, together with their compound forms.
 
+This version of the specification makes no concurrency guarantees for
+`Property`. Its requirements apply when property access is not concurrent.
+Thread safety, atomicity, visibility, and ordering between concurrent reads or
+mutations remain unspecified until the `Property` concurrency contract is
+defined.
+
 It builds on:
 
 - [Provider API Foundations](PROVIDER_API_FOUNDATIONS.md) for property
