@@ -15,7 +15,7 @@ defined.
 It builds on:
 
 - [Provider API Foundations](PROVIDER_API_FOUNDATIONS.md) for property
-  selection, conventions, missing values, `map`, `zip`, and `orElse`;
+  selection, conventions, missing values, `map`, and `zip`;
 - [Self-Referencing Property Bindings](SELF_REFERENCE_SPEC.md) for assigning an
   expression such as `P.set(P.plus(R))` back to `P`.
 
@@ -141,9 +141,8 @@ fun <C : Any, E : Any, S : Any> plus(
 ): Provider<C> = plus(source, providerOf(right), algebra)
 ```
 
-A provider-valued addition combines two present collections, otherwise selects
-the single contribution which is present. If both are missing, the result
-remains missing:
+A provider-valued addition combines two present collections. Like `zip`, it is
+missing when either input is missing:
 
 ```kotlin
 fun <C : Any, E : Any, S : Any> plus(
@@ -152,35 +151,27 @@ fun <C : Any, E : Any, S : Any> plus(
     algebra: CollectionAlgebra<C, E, S>
 ): Provider<C> =
     source.zip(right, algebra::plus)
-        .orElse(source)
-        .orElse(right)
 ```
 
-A concrete subtraction uses missing-preserving `map` because there must be a
-left collection from which to remove values:
+A concrete subtraction is likewise wrapped as a present provider:
 
 ```kotlin
 fun <C : Any, E : Any, S : Any> minus(
     source: Provider<C>,
     right: S,
     algebra: CollectionAlgebra<C, E, S>
-): Provider<C> = source.map { left ->
-    algebra.minus(left, right)
-}
+): Provider<C> = minus(source, providerOf(right), algebra)
 ```
 
-A provider-valued subtraction combines two present inputs and otherwise
-returns the left input. A missing right input therefore removes nothing, while
-a missing left input remains missing:
+A provider-valued subtraction combines two present inputs. Like `zip`, it is
+missing when either input is missing:
 
 ```kotlin
 fun <C : Any, E : Any, S : Any> minus(
     source: Provider<C>,
     right: Provider<S>,
     algebra: CollectionAlgebra<C, E, S>
-): Provider<C> = source.zip(right) { left, resolvedRight ->
-    algebra.minus(left, resolvedRight)
-}.orElse(source)
+): Provider<C> = source.zip(right, algebra::minus)
 ```
 
 Constructing any of these results remains lazy and does not mutate `source`.
@@ -194,14 +185,14 @@ The reference implementations produce these results:
 | Left result | Right result | `+` | `-` |
 |---|---|---|---|
 | `A` | `B` | `A + B` | `A - B` |
-| `A` | missing | `A` | `A` |
-| missing | `B` | `B` | missing |
+| `A` | missing | missing | missing |
+| missing | `B` | missing | missing |
 | missing | missing | missing | missing |
 
-Addition accumulates whichever contributions are present but does not invent an
-empty result when every contribution is missing. Subtraction requires a left
-collection. All original providers remain inputs, so a provider which becomes
-present before finalization participates normally.
+Both operations follow `zip` semantics and therefore require both inputs to be
+present. Missing is not treated as an empty collection or as an instruction to
+ignore that operand. All original providers remain inputs, so a provider which
+becomes present before finalization participates normally.
 
 ### 3.4 Element and bulk operands
 
@@ -230,9 +221,8 @@ fun <C : Any, E : Any, S : Any> plusAll(
 ```
 
 Concrete operands use the same definitions after `providerOf`. A missing
-element or bulk provider remains a missing contribution: addition ignores it
-when the left collection is present and remains missing when both sides are
-missing.
+element or bulk provider remains missing through `map`, so the resulting
+addition is missing regardless of whether the left collection is present.
 
 ## 4. Property selection and convention
 
@@ -249,16 +239,16 @@ Configured(V), convention C       - R = V - R
 Unconfigured, convention C        + R = C + R
 Unconfigured, convention C        - R = C - R
 
-Unconfigured, missing convention  + R = R
+Unconfigured, missing convention  + R = missing
 Unconfigured, missing convention  - R = missing
 
-Configured(Missing), convention C + R = R
+Configured(Missing), convention C + R = missing
 Configured(Missing), convention C - R = missing
 ```
 
 The last case does not fall through to `C`. The explicit missing plan remains
-selected. Addition returns the present right contribution, while subtraction
-remains missing because no left collection exists.
+selected, and both operations remain missing because their left input is
+missing.
 
 An explicit empty collection is present and shadows the convention. A
 deprecated `set(null)` overload has the same semantics as `setMissing()` and
@@ -320,10 +310,8 @@ Direct `plusAssign` and `minusAssign` methods may avoid constructing a temporary
 expression but must have identical semantics.
 
 If `P` is already configured, the operation uses its previous explicit plan.
-A previous missing plan plus a present right contribution produces that right
-contribution; if the right provider is also missing, addition remains missing.
-A previous missing plan minus any contribution remains missing. The convention
-remains shadowed in all cases.
+A previous missing plan plus or minus any contribution remains missing. The
+convention remains shadowed in all cases.
 
 If `P` is unconfigured, the previous version is a live `ConventionRead(P)`:
 
@@ -381,8 +369,8 @@ File operations must:
 - not resolve symlinks merely to establish identity;
 - preserve left order and append new right identities in right order;
 - subtract only after both operands are expanded;
-- apply the same missing rules as other collections: addition combines any
-  present contributions, while subtraction requires a present left side.
+- apply the same missing rules as other collections: both operands must be
+  present for addition or subtraction.
 
 Directory notation denotes the directory itself. Recursive membership is
 introduced only by an explicit file-tree operand; subtraction must not silently
@@ -429,26 +417,25 @@ assertValue(
     linkedMapOf("a" to 1, "b" to 3, "c" to 4)
 )
 
-// Addition accumulates whichever contributions are present.
-assertValue(providerOf(listOf("a")) + Provider.missing(), listOf("a"))
-assertValue(Provider.missing<List<String>>() + listOf("b"), listOf("b"))
+// Provider-valued operations follow zip and require both inputs.
+assertMissing(providerOf(listOf("a")) + Provider.missing())
+assertMissing(Provider.missing<List<String>>() + listOf("b"))
 assertMissing(
     Provider.missing<List<String>>() + Provider.missing<List<String>>()
 )
 
-// Subtraction requires a present left side.
-assertValue(providerOf(listOf("a")) - Provider.missing(), listOf("a"))
+assertMissing(providerOf(listOf("a")) - Provider.missing())
 assertMissing(Provider.missing<List<String>>() - listOf("b"))
 assertMissing(
     Provider.missing<List<String>>() - Provider.missing<List<String>>()
 )
 
-// Explicit missing shadows convention; addition may still use its right side.
+// Explicit missing shadows convention and propagates through both operations.
 val p = listProperty<String>()
 p.convention(listOf("default"))
 p.setMissing()
 assertMissing(p)
-assertValue(p + listOf("user"), listOf("user"))
+assertMissing(p + listOf("user"))
 assertMissing(p - listOf("user"))
 
 // An unconfigured compound assignment retains a live convention root.
@@ -469,16 +456,14 @@ traversal.
 ## 9. Summary
 
 ```text
-plus/minus are derived from orElse + map/zip
-concrete operands use map; addition uses orElse for a missing left side
-provider operands use zip and orElse without converting missing to empty
-element and bulk addition operands are lifted to collection values first
+provider-valued plus/minus are derived directly from zip
+concrete operands are wrapped as present providers
+provider operands use zip without converting missing to empty
+element and bulk addition operands are lifted with map before zip
 ListProperty concatenates and removes matching values
 SetProperty uses insertion-ordered union and difference
 MapProperty uses right-biased merge and key subtraction
-addition combines the contributions which are present
-addition is missing only when all contributions are missing
-subtraction requires a present left side and ignores a missing right side
+addition and subtraction require both operands to be present
 plus/minus do not mutate their source
 plusAssign/minusAssign use structural previous-version assignment
 an unconfigured compound assignment retains a live convention root
