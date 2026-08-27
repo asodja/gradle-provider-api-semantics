@@ -477,6 +477,11 @@ set(null)        == set(Provider.missing())
 convention(null) == convention(Provider.missing())
 ```
 
+> [!WARNING]
+> Gradle 9.8.0 behaves differently. In Gradle, `set(null)` discards the
+> explicit value, causing the property to fall back to its convention. The
+> equivalence above specifies the proposed semantics only.
+
 `set(null)` is therefore an explicit choice which shadows a convention
 permanently, until another explicit plan replaces it. Treating `set(null)` as
 removal is broken behavior because it changes the selected source rather than
