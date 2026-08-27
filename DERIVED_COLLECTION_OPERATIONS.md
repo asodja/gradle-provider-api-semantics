@@ -251,8 +251,8 @@ selected, and both operations remain missing because their left input is
 missing.
 
 An explicit empty collection is present and shadows the convention. A
-deprecated `set(null)` overload has the same semantics as `setMissing()` and
-therefore follows the configured-missing case.
+deprecated `set(null)` overload has the same semantics as
+`set(Provider.missing())` and therefore follows the configured-missing case.
 
 Null is not a valid arithmetic operand, element, map key, or map value.
 
@@ -333,8 +333,8 @@ inside the plan, not fallback from a configured missing result.
 
 The first compound assignment permanently changes `P` from `Unconfigured` to
 `Configured`. There is no `unset` operation. A later non-self assignment such
-as `P.set(Q.map(f))` or `P.setMissing()` cuts the previous chain without
-revealing the convention.
+as `P.set(Q.map(f))` or `P.set(Provider.missing())` cuts the previous chain
+without revealing the convention.
 
 Sequential compound operations retain order:
 
@@ -433,7 +433,7 @@ assertMissing(
 // Explicit missing shadows convention and propagates through both operations.
 val p = listProperty<String>()
 p.convention(listOf("default"))
-p.setMissing()
+p.set(Provider.missing())
 assertMissing(p)
 assertMissing(p + listOf("user"))
 assertMissing(p - listOf("user"))
@@ -445,7 +445,7 @@ q.convention(listOf("default"))
 assertValue(q, listOf("default", "user"))
 
 // Non-self replacement cuts that chain; the convention does not reappear.
-q.setMissing()
+q.set(Provider.missing())
 assertMissing(q)
 ```
 

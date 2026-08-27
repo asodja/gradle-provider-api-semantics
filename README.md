@@ -1,8 +1,10 @@
 # Provider API Semantics
 
-This repository contains a semantic design for a new lazy Provider and Property
-API. It focuses on rules programmers can predict from the API rather than on
-Gradle's current implementation or compatibility constraints.
+This repository contains a semantic design for a lazy Provider and Property
+API. Its foundations are deliberately close to Gradle's current public model,
+while proposing targeted changes and extensions. It focuses on rules
+programmers can predict from the API rather than compatibility constraints or
+internal implementation details.
 
 ## Contents
 
@@ -19,10 +21,10 @@ The basic semantic model:
 - what `Provider<T>` and `Property<T>` represent;
 - present, missing, unconfigured, null, and empty;
 - explicit configuration state and the convention plan;
-- monotonic explicit configuration through `set` and `setMissing`;
+- monotonic explicit configuration through `set`;
 - convention replacement without `unset` or resurrection through ordinary
   selection;
-- behavior deliberately discarded from Gradle's current API;
+- similarities and differences relative to Gradle 9.7.1;
 - why an explicit missing provider does not fall through to a convention;
 - primitive `map`, `flatMap`, `zip`, and `orElse` operations;
 - observation, lifecycle, diagnostics, and the base implementation model.

@@ -6,8 +6,11 @@ This document specifies the small semantic core of a proposed lazy Provider and
 Property API. It describes how values are selected, how conventions interact
 with explicit bindings, and how the primitive provider operations behave.
 
-It is a design for a new implementation. It does not describe Gradle's current
-implementation and is not a compatibility promise.
+This design is grounded in Gradle's current Provider and Property APIs and is
+deliberately close to them in its foundational behavior. It also proposes
+targeted semantic changes and extensions, so it is neither an exact description
+of Gradle's implementation nor a compatibility promise. Section 10 compares
+the design with Gradle 9.7.1.
 
 This version of the specification makes no concurrency guarantees for
 `Property`. Its requirements apply when property access is not concurrent.
@@ -33,7 +36,7 @@ The words **must**, **must not**, **should**, and **may** are normative.
 - [7. Lifecycle](#7-lifecycle)
 - [8. Implementation model](#8-implementation-model)
 - [9. Minimum conformance examples](#9-minimum-conformance-examples)
-- [10. Behavior deliberately discarded from the current API](#10-behavior-deliberately-discarded-from-the-current-api)
+- [10. Relationship to Gradle 9.7.1](#10-relationship-to-gradle-971)
 - [11. Design summary](#11-design-summary)
 
 ## 1. Provider and Property
@@ -72,7 +75,6 @@ interface Provider<out T : Any> {
 interface Property<T : Any> : Provider<T> {
     fun set(value: T)
     fun set(provider: Provider<T>)
-    fun setMissing()
 
     fun convention(value: T)
     fun convention(provider: Provider<T>)
@@ -166,6 +168,13 @@ task.property.set("bar")
 The result is `"bar"` regardless of which call executes first. If the user
 does not configure the property, the result is `"foo"`.
 
+This priority mechanism was introduced for Gradle property types by
+[Gradle PR #7963](https://github.com/gradle/gradle/pull/7963). Its concrete
+case involved `BasePlugin` supplying archive destination defaults without
+overwriting destinations already configured by another plugin. The same PR
+also made collection properties created by `ObjectFactory` start with empty
+values; section 10 records that as a difference from this design.
+
 A convention is therefore not an imperative “set this value only if the
 property happens to be empty right now” operation. It writes a separate,
 lower-priority plan. The property continuously applies the priority rule
@@ -228,6 +237,59 @@ explicit provider:
 configured. `convention` changes only the convention plan. Neither operation
 silently deletes the other plan, and an ordinary explicit binding can never
 fall back to the convention.
+
+### 3.4 `isPresent()` and binding selection
+
+`isPresent()` reports whether the selected plan currently evaluates to a
+present value. It does not report whether an explicit binding or convention
+has been installed:
+
+```text
+P.isPresent() =
+    true,  when evaluate(selectedPlan(P)) produces Present(value)
+    false, when evaluate(selectedPlan(P)) produces Missing
+```
+
+If evaluation fails, `isPresent()` propagates that failure rather than
+reporting `false`.
+
+Selection still happens before evaluation:
+
+| Property operations | Selected plan | `isPresent()` |
+|---|---|---|
+| none | initial missing convention | `false` |
+| `convention(C)` where `C` is present | convention `C` | `true` |
+| `convention(missingProvider)` | missing convention | `false` |
+| `convention(C); set(V)` | explicit `V` | `true` |
+| `convention(C); set(Q)` | explicit `Q` | the current result of `Q.isPresent()` |
+| `convention(C); set(missingProvider)` | explicit missing provider | `false` |
+| `convention(C); set(null)` (deprecated) | explicit missing plan | `false` |
+
+In particular, `false` does not mean “no explicit binding.” An explicitly
+selected provider may be missing, and `isPresent()` must not make the property
+fall through to its convention or cause a caller to treat the convention as a
+higher-priority replacement.
+
+Provider bindings remain live until lifecycle finalization. Their presence can
+therefore change between observations:
+
+```kotlin
+val source = property<String>()
+val target = property<String>()
+
+target.convention("default")
+target.set(source)
+
+target.isPresent() // false; source is selected, not the convention
+
+source.set("value")
+target.isPresent() // true
+target.get()       // "value"
+```
+
+Calling `isPresent()` is an observation and may evaluate the selected provider
+according to its evaluation and lifecycle policy. Merely calling `set()` or
+`convention()` remains lazy.
 
 ## 4. Primitive provider operations
 
@@ -341,7 +403,7 @@ upper.get() // "B"
 property.convention("c")
 upper.get() // "B"; the property remains explicitly configured
 
-property.setMissing()
+property.set(Provider.missing())
 upper.isPresent() // false; the convention does not reappear
 ```
 
@@ -363,7 +425,6 @@ The binding operations are:
 
 ```text
 set(value/provider)          configure or replace the explicit plan
-setMissing()                 configure an explicit missing plan
 convention(value/provider)   replace the convention plan
 ```
 
@@ -382,7 +443,7 @@ overloads must remain temporarily, they should be deprecated and translated at
 the API boundary as follows:
 
 ```text
-set(null)        == setMissing() == set(Provider.missing())
+set(null)        == set(Provider.missing())
 convention(null) == convention(Provider.missing())
 ```
 
@@ -542,32 +603,57 @@ list.set(emptyList())
 assertValue(list, emptyList())
 ```
 
-## 10. Behavior deliberately discarded from the current API
+## 10. Relationship to Gradle 9.7.1
 
-This specification is a redesign, not a compatibility description. Gradle's
-[current `Property` API](https://docs.gradle.org/current/javadoc/org/gradle/api/provider/Property.html)
-allows `set(null)` and `value(null)` to discard the explicit value so that the
-convention becomes selected. Its
-[`SupportsConvention` API](https://docs.gradle.org/current/javadoc/org/gradle/api/provider/SupportsConvention.html)
-also exposes `unset()` and `unsetConvention()`.
+The foundational model is close to the public behavior of Gradle 9.7.1. In
+both designs:
 
-This design deliberately discards those behaviors:
+- a `Property<T>` is a mutable value source and a `Provider<T>`;
+- an explicit provider is selected ahead of a convention even when that
+  provider evaluates to missing;
+- `map` and `flatMap` preserve a missing source, `zip` requires both inputs,
+  and `orElse` provides explicit fallback-after-missing;
+- provider derivation remains lazy and carries producer information;
+- `finalizeValue()` realizes and fixes the value, while `disallowChanges()`
+  prevents direct changes without realizing the provider;
+- reading and writing one property concurrently is not guaranteed to be safe.
 
-| Current-style behavior | New design |
-|---|---|
-| `set(null)` or `value(null)` removes the explicit binding | Deprecated compatibility spelling for `setMissing()` |
-| `unset()` returns a property to its never-configured state | No equivalent; explicit configuration is monotonic |
-| Clearing an explicit value reveals a convention | A convention never reappears through ordinary selection after `set` |
-| `convention(null)` or `unsetConvention()` removes a convention slot | Replace the convention plan with `Provider.missing()` |
-| Nullable binding overloads are normal configuration operations | New APIs reject null; compatibility overloads are deprecated |
+The current [`Property`](https://docs.gradle.org/9.7.1/javadoc/org/gradle/api/provider/Property.html),
+[`Provider`](https://docs.gradle.org/9.7.1/javadoc/org/gradle/api/provider/Provider.html),
+and [`HasConfigurableValue`](https://docs.gradle.org/9.7.1/javadoc/org/gradle/api/provider/HasConfigurableValue.html)
+contracts document these shared behaviors. The proposal is therefore an
+evolution of the existing model rather than an unrelated replacement.
+The implementation shape is also related: Gradle's
+[`AbstractProperty`](https://github.com/gradle/gradle/blob/v9.7.1/platforms/core-configuration/model-core/src/main/java/org/gradle/api/internal/provider/AbstractProperty.java)
+keeps mutable value state separately from a lazy value supplier. Section 8
+expresses a similar separation as a property cell and immutable provider DAG,
+without prescribing Gradle's classes, caching, or serialization machinery.
+
+The following differences remain intentional or are not yet part of this
+small core:
+
+| Area | Gradle 9.7.1 | This design |
+|---|---|---|
+| Clearing an explicit binding | `set(null)`, `value(null)`, or `unset()` discards it and reveals the convention. | Explicit state is monotonic. Deprecated `set(null)` installs `Provider.missing()` and no `unset()` is provided. |
+| Clearing a convention | `convention(null)` and `unsetConvention()` restore the default convention state. | A missing provider replaces the convention; no separate `unsetConvention()` is needed. |
+| Initial collection value | Properties created by `listProperty`, `setProperty`, and `mapProperty` initially contain an empty collection. | Every property initially selects a missing convention plan; empty remains a distinct present value. |
+| Null returned by a transform | `map`, `flatMap`, and `zip` translate a null result to a missing provider. | Null is rejected at the transform boundary; missing must be represented explicitly. |
+| Structurally self-referential assignment | `p.set(p.map(f))` is a circular evaluation. | The self-reference extension substitutes the previous version of `p`. |
+| Collection operations | Collection properties expose operations such as `add`, `addAll`, `put`, and `putAll`, but not the algebra in the derived-operations specification. | `plus`, `minus`, and their compound forms are proposed derived operations. |
+| Lifecycle surface | Also includes `finalizeValueOnRead()` and `disallowUnsafeRead()`. | The small core currently specifies only `finalizeValue()` and `disallowChanges()`. |
+| Additional Provider surface | Includes operations such as `getOrElse()` and `filter()`. | They are omitted from the small core; omission does not assign them incompatible semantics. |
+
+The current collection defaults are documented by
+[`ObjectFactory`](https://docs.gradle.org/9.7.1/javadoc/org/gradle/api/model/ObjectFactory.html).
+Gradle's own
+[`PropertyIntegrationTest`](https://github.com/gradle/gradle/blob/v9.7.1/platforms/core-configuration/model-core/src/integTest/groovy/org/gradle/api/provider/PropertyIntegrationTest.groovy#L1050-L1095)
+documents circular self-assignment. These are semantic differences, not merely
+implementation details.
 
 There is intentionally no hidden replacement for “reset to convention.” A
 caller that wants a particular value or provider must set that source
-explicitly. The design retains ordinary explicit replacement, explicit missing
-plans, convention replacement, and lifecycle finalization.
-
-This trade-off removes reversible binding-selection state and prevents an old,
-shadowed convention from unexpectedly becoming observable again.
+explicitly. This removes reversible binding-selection state and prevents an
+old, shadowed convention from unexpectedly becoming observable again.
 
 ## 11. Design summary
 
@@ -577,14 +663,14 @@ explicit state moves once from Unconfigured to Configured
 selection chooses convention only while explicit is Unconfigured
 selection occurs before provider evaluation
 set configures or replaces the explicit plan
-setMissing installs an explicit missing plan
+set(Provider.missing()) installs an explicit missing plan
 there is no unset operation and conventions do not reappear through selection
 convention replaces the convention plan
 an explicit missing provider does not fall through to convention
 map and flatMap transform one present source
 zip combines two present sources
 orElse is the explicit fallback-after-missing operation
-deprecated set(null) is another spelling of setMissing
+deprecated set(null) is another spelling of set(Provider.missing())
 null is never a property value
 ```
 

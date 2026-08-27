@@ -454,10 +454,10 @@ p.set(q.map(g)) // does not read p; the a -> f chain is reclaimable
 `q.map(g)` remains live with respect to `q`, but it has no reason to retain an
 old version of `p`.
 
-`setMissing()` is an ordinary non-self replacement and also cuts the explicit
-chain. `finalizeValue()` may collapse a chain to a fixed result. External
-providers can independently keep old plans alive; that is normal provider-DAG
-reachability rather than property history.
+`set(Provider.missing())` is an ordinary non-self replacement and also cuts the
+explicit chain. `finalizeValue()` may collapse a chain to a fixed result.
+External providers can independently keep old plans alive; that is normal
+provider-DAG reachability rather than property history.
 
 An opaque provider never causes conservative retention. If it hides a read of
 the target property, evaluation rejects that read as a cycle.
