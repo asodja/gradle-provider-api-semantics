@@ -24,7 +24,8 @@ The basic semantic model:
 - monotonic explicit configuration through `set`;
 - convention replacement without `unset` or resurrection through ordinary
   selection;
-- similarities and differences relative to Gradle 9.7.1;
+- current initial values and differences relative to the upcoming Gradle 9.8.0
+  release;
 - why an explicit missing provider does not fall through to a convention;
 - primitive `map`, `flatMap`, `zip`, and `orElse` operations;
 - observation, lifecycle, diagnostics, and the base implementation model.
