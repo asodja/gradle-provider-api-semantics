@@ -22,6 +22,9 @@ Operations built from this core, including collection `plus` and `minus`, are
 specified in [Derived Collection Operations](DERIVED_COLLECTION_OPERATIONS.md).
 Previous-version assignment is specified separately in
 [Self-Referencing Property Bindings](SELF_REFERENCE_SPEC.md).
+An optional binding mode for properties configured by Declarative Gradle
+Reactive Plugins is specified in
+[Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md).
 
 The words **must**, **must not**, **should**, and **may** are normative.
 
@@ -53,6 +56,11 @@ A property is a mutable binding that is also readable as a provider:
 ```text
 Property<T> = monotonic explicit state + convention plan + lifecycle state
 ```
+
+In collaborative mode, a property may retain attributed self-updates after
+selecting its explicit or convention source, then resolve them to one provider
+before evaluation. Ordinary property binding and the foundational selection
+rule remain unchanged.
 
 A property does not store `null`. Its provider result is either a present,
 non-null value or missing.
@@ -562,6 +570,12 @@ conventionPlan: ProviderNode<T> = Missing(NoConvention)
 lifecycle:      mutable | changesDisallowed | finalized
 ```
 
+The direct node-replacement description below is the ordinary-property form.
+In the optional collaborative mode, Declarative Gradle distinguishes explicit
+source binding from attributed Reactive Plugin updates. It orders and compiles
+those updates to one `ProviderNode<T>` before evaluation. The selection and
+evaluation layers remain unchanged.
+
 `Configured` is monotonic. A `set` may replace its node but cannot restore the
 `Unconfigured` variant. This lets selection test one stable state bit rather
 than interpret a missing provider result as absence of configuration.
@@ -714,3 +728,7 @@ null is never a property value
 This core is intentionally small. Collection arithmetic and other domain
 operations should be defined from these primitives rather than given separate
 rules for property selection or convention handling.
+
+Collaborative binding is an optional mode for Declarative Gradle properties.
+It must resolve the selected source and attributed Reactive Plugin updates to
+the same primitive provider model before evaluation.

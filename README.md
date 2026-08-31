@@ -33,6 +33,19 @@ The basic semantic model:
 Start here. Every other document builds on these selection and provider
 semantics.
 
+### [Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md)
+
+An optional `Property` binding mode for Declarative Gradle Reactive Plugins:
+
+- separates declarative source selection from attributed plugin updates;
+- recognizes self-assignment through `map`, `flatMap`, `zip`, and operations
+  such as `p = p.plus(v)`;
+- uses global contributor order with exceptional per-property constraints;
+- rejects unattributed mutation and unauthorized plugin replacement;
+- compiles the resolved update sequence to the existing Provider algebra;
+- leaves ordinary Kotlin DSL, Groovy DSL, and imperative-plugin property
+  semantics unchanged.
+
 ### [Derived Collection Operations](DERIVED_COLLECTION_OPERATIONS.md)
 
 Operations expressed from the foundational primitives:
@@ -69,12 +82,14 @@ Provider API Foundations
     +--> Derived Collection Operations
     |
     +--> Self-Referencing Property Bindings
-              |
-              +--> compound collection assignment
+    |         |
+    |         +--> compound collection assignment
+    |
+    +--> Collaborative Property Mode
 ```
 
-Read the foundations first. The other two documents are independent after that,
-except that compound collection assignment uses the self-reference rule.
+Read the foundations first. The other documents build on that core. Compound
+collection assignment also uses the self-reference rule.
 
 ## Shared design principles
 
@@ -90,6 +105,10 @@ Across all documents:
 - derived operations are defined from the smallest useful primitive set;
 - structurally self-referential assignment captures a previous plan, not a
   realized value;
+- collaborative properties resolve a selected source and attributed Reactive
+  Plugin updates to one provider plan before evaluation;
+- global contributor order and explicit property constraints, rather than
+  callback execution order, order collaborative updates;
 - diagnostics and provenance are part of observable behavior.
 
 The words **must**, **must not**, **should**, and **may** are normative in the

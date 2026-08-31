@@ -7,6 +7,11 @@ implementation. It builds on [Provider API Foundations](PROVIDER_API_FOUNDATIONS
 but can be implemented separately from
 [Derived Collection Operations](DERIVED_COLLECTION_OPERATIONS.md).
 
+[Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md) defines an
+optional Declarative Gradle binding mode in which a recognized self-update and
+its Reactive Plugin contributor are retained until ordered resolution. The
+substitution rules in this document remain the ordinary-property behavior.
+
 This version of the specification makes no concurrency guarantees for
 `Property`. Its requirements apply when property access is not concurrent.
 Thread safety, atomicity, visibility, and ordering between concurrent reads,
