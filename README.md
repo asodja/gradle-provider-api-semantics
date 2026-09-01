@@ -33,6 +33,21 @@ The basic semantic model:
 Start here. Every other document builds on these selection and provider
 semantics.
 
+### [Property Mutation Provenance](PROPERTY_PROVENANCE.md)
+
+A shared attribution model for ordinary and collaborative properties:
+
+- distinguishes stable contributor identity, runtime application identity,
+  source location, and mutation kind;
+- derives contributor identity for imperative plugins and scripts from
+  Gradle's user-code application context;
+- accepts explicit attribution from Declarative Gradle and Reactive Plugins;
+- captures and restores attribution across Gradle-managed callbacks;
+- interns origins into compact build-local IDs;
+- preserves ordinary property semantics while enabling collaborative
+  authorization, ordering, and diagnostics;
+- defines fail-closed behavior for unattributed collaborative mutation.
+
 ### [Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md)
 
 An optional `Property` binding mode for Declarative Gradle Reactive Plugins:
@@ -82,14 +97,11 @@ Previous-version assignment and its implementation:
 
 ```text
 Provider API Foundations
-    |
     +--> Derived Collection Operations
-    |
-    +--> Self-Referencing Property Bindings
-    |         |
+    +--> Self-Referencing Property Bindings --+
     |         +--> compound collection assignment
-    |
-    +--> Collaborative Property Mode
+    |                                         +--> Collaborative Property Mode
+    +--> Property Mutation Provenance --------+
 ```
 
 Read the foundations first. The other documents build on that core. Compound
@@ -109,6 +121,10 @@ Across all documents:
 - derived operations are defined from the smallest useful primitive set;
 - structurally self-referential assignment captures a previous plan, not a
   realized value;
+- mutation provenance keeps stable contributor identity separate from runtime
+  application identity, source location, and Provider producer metadata;
+- Gradle-managed callbacks retain the causal attribution active when the user
+  code was registered;
 - collaborative properties keep source selection separate from one
   incrementally composed Reactive Plugin update pipeline;
 - callback update order must conform to each property's effective contributor
