@@ -270,11 +270,11 @@ P += R == P.set(P.plus(R))
 P -= R == P.set(P.minus(R))
 ```
 
-For an open collaborative property, `set` may recognize these structural forms
-as an attributed `Append` or `Remove`. If the contributor follows the global
-order and satisfies the property's constraints, the operation is immediately
-composed using the same `plus`, `minus`, and `zip` definitions. Otherwise the
-assignment fails.
+For a collaborative property, `set` may recognize these structural forms as an
+attributed `Append` or `Remove`. If the contributor follows the property's
+effective order, derived from the global default and local constraints, the
+operation is immediately composed using the same `plus`, `minus`, and `zip`
+definitions. Otherwise the assignment fails.
 
 The canonical implementations delegate to the non-mutating operations:
 

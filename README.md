@@ -40,10 +40,12 @@ An optional `Property` binding mode for Declarative Gradle Reactive Plugins:
 - separates declarative source selection from attributed plugin updates;
 - recognizes self-assignment through `map`, `flatMap`, `zip`, and operations
   such as `p = p.plus(v)`;
-- validates each update against global contributor order and per-property
-  constraints;
+- validates each update against the property's effective order, derived from
+  the global default and local constraints;
 - rejects unattributed mutation and unauthorized plugin replacement;
 - immediately composes accepted updates using the existing Provider algebra;
+- allows value queries to observe the currently composed update prefix and
+  keeps the ordinary Property lifecycle controls;
 - leaves ordinary Kotlin DSL, Groovy DSL, and imperative-plugin property
   semantics unchanged.
 
@@ -108,8 +110,8 @@ Across all documents:
   realized value;
 - collaborative properties keep source selection separate from one
   incrementally composed Reactive Plugin update pipeline;
-- callback update order must conform to global contributor order and explicit
-  property constraints;
+- callback update order must conform to each property's effective contributor
+  order;
 - diagnostics and provenance are part of observable behavior.
 
 The words **must**, **must not**, **should**, and **may** are normative in the
