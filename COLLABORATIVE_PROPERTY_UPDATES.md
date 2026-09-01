@@ -7,9 +7,9 @@ Declarative Gradle Reactive Plugins. It extends the model in
 [Provider API Foundations](PROVIDER_API_FOUNDATIONS.md).
 
 Reactive Plugins operate on `Property` instances directly. A collaborative
-property attributes their structural updates, validates that they are applied
-in the declared contributor order, and immediately composes them into one
-Provider pipeline.
+property attributes their structural updates and immediately composes them
+into one Provider pipeline. Before observation or lifecycle closure, it
+validates the recorded update order against the applicable contributor order.
 
 Ordinary properties keep their existing semantics. Collaborative mode is
 activated by Declarative Gradle only for properties in its model. This is an
@@ -27,10 +27,12 @@ Collaborative
 ```
 
 A collaborative property accepts attributed source bindings and structural
-updates. Each accepted update is checked and composed immediately.
+updates. Each structural update is attributed, recorded, and composed
+immediately. Contributor ordering is validated later over the complete update
+trace available at that point.
 
-Because the property always has a valid current Provider plan, ordinary value
-queries remain valid:
+Because the property always has a current Provider plan, ordinary value queries
+remain valid:
 
 ```text
 get()
@@ -38,10 +40,11 @@ getOrNull()
 isPresent()
 ```
 
-A query observes the source and update prefix accepted at that point. A later
-accepted update may therefore change a later observation, just as a later
-ordinary property mutation can. Querying does not leave collaborative mode or
-prevent later updates.
+Before evaluating the plan, a query validates the recorded update order. If it
+is valid, the query observes the source and update prefix accepted at that
+point. A later update or constraint invalidates the cached validation and may
+therefore change a later result or make a later query fail validation. Querying
+does not leave collaborative mode or prevent later changes.
 
 Provider derivation is also unchanged:
 
@@ -50,10 +53,13 @@ val derived = property.map(f)
 ```
 
 Existing Property lifecycle controls retain their ordinary meaning in
-collaborative mode. For example, `disallowChanges()` rejects later source
-bindings and updates, while `finalizeValue()` fixes the value of the currently
-composed plan and rejects later changes. An implementation that supports
-`finalizeValueOnRead()` applies its normal behavior.
+collaborative mode. Ordering constraints count as changes to the collaborative
+property. Before lifecycle closure, the property validates its update trace.
+`disallowChanges()` can do this without evaluating the Provider value and then
+rejects later source bindings, updates, and constraints. `finalizeValue()`
+validates before fixing the value of the currently composed plan. An
+implementation that supports `finalizeValueOnRead()` validates before applying
+its normal behavior.
 
 ## 2. Property state
 
@@ -64,10 +70,15 @@ CollaborativeState<T>:
     conventionPlan
     explicitSource
     updatePipeline
-    lastContributor
+    updateTrace
+    localConstraints
+    validationState
 ```
 
 `updatePipeline` is initially the identity transformation.
+`updateTrace` records each structural operation's contributor, kind, and
+diagnostic origin. `validationState` caches whether the current trace and
+constraints have been checked.
 
 The existing explicit-versus-convention rule selects the source:
 
@@ -96,11 +107,11 @@ it is binding a source or contributing a Reactive Plugin update.
 |---|---|
 | Owning plugin calls `convention(q)` | Bind the convention source |
 | Declarative source context calls `set(q)` | Bind the explicit source |
-| Contributor calls `set(p.map(f))` | Validate and compose `Map(Previous, f)` |
-| Contributor calls `set(p.flatMap(f))` | Validate and compose `FlatMap(Previous, f)` |
-| Contributor calls `set(p.zip(q, f))` | Validate and compose `Zip(Previous, q, f)` |
-| Contributor calls `set(p.plus(q))` | Validate and compose `Append(q)` |
-| Contributor calls `set(p.minus(q))` | Validate and compose `Remove(q)` |
+| Contributor calls `set(p.map(f))` | Record contributor and compose `Map(Previous, f)` |
+| Contributor calls `set(p.flatMap(f))` | Record contributor and compose `FlatMap(Previous, f)` |
+| Contributor calls `set(p.zip(q, f))` | Record contributor and compose `Zip(Previous, q, f)` |
+| Contributor calls `set(p.plus(q))` | Record contributor and compose `Append(q)` |
+| Contributor calls `set(p.minus(q))` | Record contributor and compose `Remove(q)` |
 | Reactive Plugin calls non-self `set(q)` | Reject unauthorized replacement |
 | Unattributed code mutates a collaborative property | Reject |
 
@@ -119,8 +130,10 @@ the property identifies the transformation:
 Zip(Previous, q, f)
 ```
 
-`Previous` means the update pipeline already accepted for `p`. After validating
-the contributor, the property composes the transformation onto that pipeline.
+`Previous` means the update pipeline already accepted for `p`. The property
+requires an authorized contributor, records that contributor and the operation,
+and composes the transformation onto the pipeline. It does not validate
+contributor order at this assignment.
 
 Derivation without assignment remains non-mutating:
 
@@ -146,28 +159,44 @@ for example:
 base-plugin < feature-plugin < override-plugin < build-author
 ```
 
-Before its first structural update, a property may declare local ordering
-constraints. Declarative Gradle combines those hard constraints with global
-order as the tie-breaker to produce the property's effective contributor order.
-The local constraints must be acyclic. Changing them after the first update is
-rejected because the existing pipeline has already been composed.
+A property may declare local ordering constraints while it remains mutable.
+Declarative Gradle combines those hard constraints with global order as the
+tie-breaker to produce the property's effective contributor order. The local
+constraints must be acyclic. Because validation is separate from composition,
+constraints may be declared before or after structural updates.
 
-Updates to one property must arrive in nondecreasing effective order. Updates
-from the same contributor preserve source order.
+The recorded updates for one property must form a nondecreasing sequence in the
+effective order. Updates from the same contributor preserve source order.
 
-Conceptually, an update is accepted as follows:
+Conceptually, updates and constraints are recorded as follows:
 
 ```text
 acceptUpdate(contributor, update):
-    require contributor is identified
-    require lastContributor <=property contributor
+    require contributor is identified and authorized
 
     updatePipeline = update(updatePipeline)
-    lastContributor = contributor
+    updateTrace.append(contributor, update.kind, update.origin)
+    validationState = dirty
+
+addConstraint(constraint):
+    require property is mutable
+
+    localConstraints.add(constraint)
+    validationState = dirty
 ```
 
-If an earlier contributor updates the property after a later contributor, the
-assignment fails. The property does not retain the update and reorder it later.
+Before observation or lifecycle closure, the property validates the trace:
+
+```text
+validateOrder():
+    if validationState is dirty:
+        effectiveOrder = resolve(globalOrder, localConstraints)
+        require updateTrace is nondecreasing in effectiveOrder
+        validationState = valid
+```
+
+An invalid trace fails before any Provider transformation is evaluated. The
+property does not reorder updates to make the trace valid.
 
 A property may override the default relationship:
 
@@ -182,17 +211,18 @@ the global default unless they declare their own constraints.
 
 Deferred callbacks retain the identity of the Reactive Plugin action that
 registered them. Callback execution order is allowed to vary only when it
-still produces an update sequence compatible with each property's effective
-order.
+produces an update sequence compatible with each property's effective order;
+otherwise observation or lifecycle closure fails.
 
 The property does not inspect callback bodies or decide whether transformations
 commute. Tags such as `Append` and `Remove` are useful for provenance and
 diagnostics, not for reordering.
 
-## 5. Immediate composition
+## 5. Immediate composition and deferred validation
 
-The property does not keep a list of updates until `get()`. It incrementally
-maintains one Provider transformation pipeline.
+The property does not defer Provider construction or replay transformations at
+`get()`. It incrementally maintains one Provider transformation pipeline and a
+lightweight provenance trace used only for ordering validation.
 
 For example:
 
@@ -208,9 +238,19 @@ produces:
 Map(Zip(selectedSource, a, f), g)
 ```
 
-No value is queried while composing the pipeline. Evaluating the current plan
-preserves laziness, missing-value propagation, producer information,
-dependencies, and validation.
+and records:
+
+```text
+[pluginA: Zip, pluginB: Map]
+```
+
+Before observing the value, the property validates the trace and then evaluates
+the already composed plan. This preserves laziness, missing-value propagation,
+producer information, dependencies, and ordinary Provider validation.
+
+An implementation may store contributor metadata on structural Provider nodes
+or in a compact side trace. The observable semantics do not depend on that
+choice.
 
 Collection updates compose using
 [Derived Collection Operations](DERIVED_COLLECTION_OPERATIONS.md):
@@ -228,7 +268,7 @@ Suppose the global contributor order is:
 feature-plugin < override-plugin
 ```
 
-This succeeds because updates are applied in that order:
+Both updates are composed immediately:
 
 ```kotlin
 enabled.convention(true)
@@ -254,7 +294,15 @@ The effective plan computes:
 (selectedSource && featureAvailable) || forceEnabled
 ```
 
-The reversed application fails:
+The recorded trace is:
+
+```text
+feature-plugin -> override-plugin
+```
+
+It satisfies the global order, so observation succeeds.
+
+Now consider the reversed application:
 
 ```kotlin
 // override-plugin
@@ -272,21 +320,28 @@ enabled.set(
 )
 ```
 
-After accepting the `override-plugin` update, the property cannot accept an
-update from the earlier `feature-plugin`:
+Both updates are composed, producing:
 
 ```text
-Cannot update 'enabled' from feature-plugin.
+(selectedSource || forceEnabled) && featureAvailable
+```
+
+but the recorded trace is invalid under the global order. An observation such
+as `enabled.get()` fails before evaluating the Provider plan:
+
+```text
+Cannot observe 'enabled': contributor updates are out of order.
 
 Required contributor order:
   feature-plugin < override-plugin
 
-Observed update order:
-  override-plugin < feature-plugin
+Recorded update order:
+  override-plugin -> feature-plugin
 ```
 
 The reversed application can instead be made valid for this property by
-declaring its local order before either update:
+declaring its local order while the property remains mutable. The constraint
+may be declared before or after the structural updates:
 
 ```kotlin
 enabled.collaboration {
@@ -300,7 +355,8 @@ The effective order for `enabled` is then:
 override-plugin < feature-plugin
 ```
 
-The reversed application succeeds and composes:
+The reversed trace is now valid, so observation succeeds with the already
+composed plan:
 
 ```text
 (selectedSource || forceEnabled) && featureAvailable
@@ -318,10 +374,11 @@ local override.
 | Explicit-versus-convention selection | Selects the source before updates |
 | Ordinary `set` | Unchanged outside collaborative mode |
 | Declarative source `set` | Binds the source without discarding updates |
-| Reactive Plugin self-`set` | Validates order and composes immediately |
+| Reactive Plugin self-`set` | Records provenance and composes immediately |
 | Reactive Plugin non-self `set` | Rejected |
-| Value queries | Observe the currently composed update prefix |
-| Lifecycle controls | Keep their ordinary finalization and mutation rules |
+| Property constraints | May change while mutable and invalidate cached validation |
+| Value queries | Validate the trace, then observe the composed update prefix |
+| Lifecycle controls | Validate the trace before closing ordinary mutations |
 
 Ordinary self-assignment immediately captures the previous plan:
 
@@ -329,9 +386,10 @@ Ordinary self-assignment immediately captures the previous plan:
 P.set(P.map(f)) -> P.set(previous(P).map(f))
 ```
 
-Collaborative self-assignment first validates its contributor, then composes
-the same Provider operation onto the update pipeline. Both modes ultimately
-use the same Provider primitives.
+Collaborative self-assignment records its contributor and composes the same
+Provider operation onto the update pipeline. Before observation or lifecycle
+closure, the property validates the recorded contributor sequence. Both modes
+ultimately use the same Provider primitives.
 
 ## 8. Scope and open questions
 

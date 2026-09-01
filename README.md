@@ -40,12 +40,13 @@ An optional `Property` binding mode for Declarative Gradle Reactive Plugins:
 - separates declarative source selection from attributed plugin updates;
 - recognizes self-assignment through `map`, `flatMap`, `zip`, and operations
   such as `p = p.plus(v)`;
-- validates each update against the property's effective order, derived from
-  the global default and local constraints;
+- records each update's contributor and validates the complete trace against
+  the property's effective order before observation or lifecycle closure;
 - rejects unattributed mutation and unauthorized plugin replacement;
 - immediately composes accepted updates using the existing Provider algebra;
-- allows value queries to observe the currently composed update prefix and
-  keeps the ordinary Property lifecycle controls;
+- allows constraints to be declared while the property remains mutable;
+- allows value queries to observe the validated, currently composed update
+  prefix and keeps the ordinary Property lifecycle controls;
 - leaves ordinary Kotlin DSL, Groovy DSL, and imperative-plugin property
   semantics unchanged.
 

@@ -8,10 +8,11 @@ but can be implemented separately from
 [Derived Collection Operations](DERIVED_COLLECTION_OPERATIONS.md).
 
 [Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md) defines an
-optional Declarative Gradle binding mode in which a recognized self-update and
-its Reactive Plugin contributor are validated before the update is immediately
-composed onto a separate update pipeline. The substitution rules in this
-document remain the ordinary-property behavior.
+optional Declarative Gradle binding mode in which a recognized self-update is
+immediately composed onto a separate update pipeline and recorded with its
+Reactive Plugin contributor. Contributor order is validated before observation
+or lifecycle closure. The substitution rules in this document remain the
+ordinary-property behavior.
 
 This version of the specification makes no concurrency guarantees for
 `Property`. Its requirements apply when property access is not concurrent.

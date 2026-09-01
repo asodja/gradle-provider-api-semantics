@@ -58,9 +58,10 @@ Property<T> = monotonic explicit state + convention plan + lifecycle state
 ```
 
 In collaborative mode, a property may keep an attributed self-update pipeline
-separate from its explicit or convention source. Each update is validated
-against contributor order and immediately composed. Ordinary property binding
-and the foundational selection rule remain unchanged.
+separate from its explicit or convention source. Each update is immediately
+composed and recorded with its contributor. The recorded order is validated
+before observation or lifecycle closure. Ordinary property binding and the
+foundational selection rule remain unchanged.
 
 A property does not store `null`. Its provider result is either a present,
 non-null value or missing.
@@ -573,8 +574,9 @@ lifecycle:      mutable | changesDisallowed | finalized
 The direct node-replacement description below is the ordinary-property form.
 In the optional collaborative mode, Declarative Gradle distinguishes explicit
 source binding from attributed Reactive Plugin updates. Each structurally
-recognized update is order-validated and immediately composed onto one update
-pipeline. The selection and evaluation layers remain unchanged.
+recognized update is immediately composed onto one update pipeline and recorded
+for contributor-order validation before observation or lifecycle closure. The
+selection and evaluation layers remain unchanged.
 
 `Configured` is monotonic. A `set` may replace its node but cannot restore the
 `Unconfigured` variant. This lets selection test one stable state bit rather
@@ -730,5 +732,6 @@ operations should be defined from these primitives rather than given separate
 rules for property selection or convention handling.
 
 Collaborative binding is an optional mode for Declarative Gradle properties.
-It must validate and compose attributed Reactive Plugin updates using the same
-primitive provider model used for ordinary evaluation.
+It must immediately compose attributed Reactive Plugin updates using the same
+primitive provider model used for ordinary evaluation and validate their
+recorded contributor order before observation or lifecycle closure.
