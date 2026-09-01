@@ -57,10 +57,10 @@ A property is a mutable binding that is also readable as a provider:
 Property<T> = monotonic explicit state + convention plan + lifecycle state
 ```
 
-In collaborative mode, a property may retain attributed self-updates after
-selecting its explicit or convention source, then resolve them to one provider
-before evaluation. Ordinary property binding and the foundational selection
-rule remain unchanged.
+In collaborative mode, a property may keep an attributed self-update pipeline
+separate from its explicit or convention source. Each update is validated
+against contributor order and immediately composed. Ordinary property binding
+and the foundational selection rule remain unchanged.
 
 A property does not store `null`. Its provider result is either a present,
 non-null value or missing.
@@ -572,9 +572,9 @@ lifecycle:      mutable | changesDisallowed | finalized
 
 The direct node-replacement description below is the ordinary-property form.
 In the optional collaborative mode, Declarative Gradle distinguishes explicit
-source binding from attributed Reactive Plugin updates. It orders and compiles
-those updates to one `ProviderNode<T>` before evaluation. The selection and
-evaluation layers remain unchanged.
+source binding from attributed Reactive Plugin updates. Each structurally
+recognized update is order-validated and immediately composed onto one update
+pipeline. The selection and evaluation layers remain unchanged.
 
 `Configured` is monotonic. A `set` may replace its node but cannot restore the
 `Unconfigured` variant. This lets selection test one stable state bit rather
@@ -730,5 +730,5 @@ operations should be defined from these primitives rather than given separate
 rules for property selection or convention handling.
 
 Collaborative binding is an optional mode for Declarative Gradle properties.
-It must resolve the selected source and attributed Reactive Plugin updates to
-the same primitive provider model before evaluation.
+It must validate and compose attributed Reactive Plugin updates using the same
+primitive provider model used for ordinary evaluation.

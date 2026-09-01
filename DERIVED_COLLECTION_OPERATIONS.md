@@ -23,9 +23,9 @@ The term **derived** is intentional. These operations add collection algebra,
 not another property or convention model.
 
 [Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md) defines an
-optional Declarative Gradle binding mode that retains a compound operation and
-its Reactive Plugin contributor before ordering and compiling it back to the
-algebra specified here.
+optional Declarative Gradle binding mode that validates a compound operation's
+Reactive Plugin contributor before immediately composing the operation using
+the algebra specified here.
 
 The words **must**, **must not**, **should**, and **may** are normative.
 
@@ -271,9 +271,10 @@ P -= R == P.set(P.minus(R))
 ```
 
 For an open collaborative property, `set` may recognize these structural forms
-and record an attributed `Append` or `Remove`. Global contributor order and
-local property constraints determine its position. Resolution then compiles it
-using the same `plus`, `minus`, and `zip` definitions.
+as an attributed `Append` or `Remove`. If the contributor follows the global
+order and satisfies the property's constraints, the operation is immediately
+composed using the same `plus`, `minus`, and `zip` definitions. Otherwise the
+assignment fails.
 
 The canonical implementations delegate to the non-mutating operations:
 
