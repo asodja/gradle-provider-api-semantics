@@ -35,18 +35,22 @@ semantics.
 
 ### [Property Mutation Provenance](PROPERTY_PROVENANCE.md)
 
-A shared attribution model for ordinary and collaborative properties:
+A shared attribution model for ordinary and collaborative properties,
+revised against a prototype and its measurements:
 
 - distinguishes stable contributor identity, runtime application identity,
   source location, and mutation kind;
-- derives contributor identity for imperative plugins and scripts from
-  Gradle's user-code application context;
-- accepts explicit attribution from Declarative Gradle and Reactive Plugins;
-- captures and restores attribution across Gradle-managed callbacks;
-- interns origins into compact build-local IDs;
-- preserves ordinary property semantics while enabling collaborative
-  authorization, ordering, and diagnostics;
-- defines fail-closed behavior for unattributed collaborative mutation.
+- derives contributor identity from Gradle's user-code application context,
+  which already restores attribution across the callbacks Gradle stores;
+- captures at the mutation boundary, reached through the property's host, and
+  decides whether to track when the property is created;
+- interns records so that recording allocates nothing;
+- reports what contributor-only and located provenance actually cost;
+- states what is not covered: properties outside project scope, the
+  configuration cache, plugin-owned threads and callback stores, and
+  collection contributions;
+- defines fail-closed behavior for unattributed collaborative mutation, and
+  what a retained trace forbids.
 
 ### [Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md)
 

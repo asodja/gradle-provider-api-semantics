@@ -2,439 +2,290 @@
 
 ## Status and intent
 
-This document describes a shared provenance mechanism for property mutations
-made by imperative plugins, scripts, Declarative Gradle, and Reactive Plugins.
-It supports the contributor-order rules in
-[Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md), while also
-allowing ordinary properties to report where their configuration came from.
+This document describes how a property can record who configured it, so that
+diagnostics can name the plugin, script plugin or build script responsible, and
+so that [Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md) has a
+contributor identity to validate update order against.
+
+It is deliberately short. An earlier version specified the mechanism in detail;
+this version keeps the model and replaces the speculation with what a prototype
+against Gradle actually showed, including the parts that do not work. Numbers
+below are measured on the Gradle build itself unless stated otherwise.
 
 This is an architectural proposal, not Gradle's current implementation or a
 compatibility promise. It makes no concurrency guarantees.
 
-## 1. What provenance identifies
+## Contents
 
-Property mutation provenance answers four separate questions:
+- [1. What provenance identifies](#1-what-provenance-identifies)
+- [2. How it works](#2-how-it-works)
+- [3. Where the contributor comes from](#3-where-the-contributor-comes-from)
+- [4. What it costs](#4-what-it-costs)
+- [5. What is not covered](#5-what-is-not-covered)
+- [6. What collaborative mode additionally requires](#6-what-collaborative-mode-additionally-requires)
+- [7. Minimum conformance cases](#7-minimum-conformance-cases)
+
+## 1. What provenance identifies
 
 | Question | Representation | Purpose |
 |---|---|---|
-| Who caused the mutation? | `ContributorKey` | Collaboration authorization and ordering |
-| Which execution caused it? | `ApplicationId` | Diagnostics for a particular plugin or script application |
+| Who caused the mutation? | `ContributorKey` | Authorization and ordering |
+| Which execution caused it? | `ApplicationId` | Diagnostics for one application |
 | Where was it declared? | `SourceLocation` | Actionable diagnostics |
-| What happened? | `MutationKind` | Explaining the effective property plan |
+| What happened? | `MutationKind` | Explaining the effective plan |
 
-These concepts must not be collapsed into one identifier. In particular:
+These must not be collapsed into one identifier. An application ID identifies
+one runtime application, not a stable contributor. A source location identifies
+a call site, not the contributor that caused it. Provider producer and
+dependency metadata describes what a value depends on, not who mutated the
+property.
 
-- an application ID identifies one runtime application, not a stable
-  contributor;
-- a source location identifies a call site, not the contributor that caused it;
-- Provider producer and dependency metadata describes what a value depends on,
-  not who mutated the property.
+Only the first is required. The other three are useful and, as section 4 shows,
+the second and third are what make provenance expensive.
 
-This document concerns mutation provenance. Existing Provider producer and
-dependency propagation remains unchanged.
-
-## 2. Provenance records
-
-Conceptually, a mutation record contains:
-
-```text
-MutationRecord:
-    originId
-    applicationId?
-    kind
-```
-
-`originId` refers to an interned descriptor:
-
-```text
-MutationOrigin:
-    contributor
-    location?
-    frontend
-```
-
-Possible contributor keys include:
-
-```text
-Plugin(pluginId)
-PluginClass(className, implementationIdentity)
-Script(normalizedUri)
-ReactivePlugin(pluginId)
-BuildAuthor
-GradleInternal(component)
-Unknown
-```
-
-New collaborative contributors should have stable explicit IDs. A binary
-plugin applied without an ID may fall back to a stable implementation identity,
-such as its class name together with the identity of the build logic or plugin
-implementation that supplied the class. Runtime objects such as a `ClassLoader`
-must not be part of persisted identity.
-
-`MutationKind` describes the property operation, for example:
-
-```text
-SetSource
-SetConvention
-MapUpdate
-FlatMapUpdate
-ZipUpdate
-Append
-Remove
-Add
-AddAll
-Put
-PutAll
-```
-
-The kind is useful for diagnostics. It does not make operations commutative and
-does not authorize reordering.
-
-## 3. Allocating `originId`
-
-A build-scoped registry interns normalized origins:
-
-```text
-intern(origin):
-    if origin is already known:
-        return its existing originId
-    originId = next build-local ID
-    store originId -> origin
-    return originId
-```
-
-For example:
-
-```text
-1 -> Plugin("java"), JavaPlugin.java, IMPERATIVE
-2 -> Plugin("com.example.feature"), FeaturePlugin.kt:42, IMPERATIVE
-3 -> ReactivePlugin("override"), defaults.dcl:17:5, DECLARATIVE
-4 -> BuildAuthor, build.gradle.kts:23, KOTLIN_DSL
-```
-
-An `originId` is only a compact handle within one build state. It must not be
-used as a contributor key or assumed stable across builds. Configuration Cache
-serialization writes the origin table or the referenced descriptors and
-re-interns them when loading an entry.
-
-`applicationId` is stored on the mutation occurrence rather than in the
-interned origin. This allows repeated applications of the same plugin call site
-to share one origin descriptor.
-
-## 4. Capturing imperative plugin and script provenance
+## 2. How it works
 
 Gradle already establishes a user-code application context while applying
-binary plugins and scripts. A property mutation context can adapt the current
-application as follows:
+plugins and scripts, and already restores it across the callbacks it stores.
+Provenance is that context, read at the moment a property is mutated.
 
-| Current user-code source | Contributor key |
+```text
+user code application context   (already exists; restored across callbacks)
+            |
+            v
+    property host          asked once per property: do you track provenance?
+            |              asked per mutation: who is running right now?
+            v
+    mutation boundary      set, convention, unset, add, put
+            |
+            v
+    interned record        (contributor, kind), shared build-wide
+```
+
+Four rules make this work:
+
+**Capture at the mutation boundary.** Every binding or update reads the current
+attribution where the property mutates, after the mutation has succeeded, so a
+rejected mutation leaves no trace. Attribution belongs to the mutation: if
+plugin A creates `p.map(f)` and plugin B calls `p.set(thatProvider)`, the
+contributor is B. A transform's creation context must not replace it.
+
+**Reach the context through the property's host.** The host is already handed to
+every property when it is created, so no property constructor, property factory
+or object factory signature has to change.
+
+**Decide whether to track when the property is created, not per mutation.**
+Asking the host on every mutation is behaviour-neutral but observable: it broke
+188 existing Gradle unit tests that assert a property touches no collaborators
+while being mutated. Asking once, at construction, moves that interaction
+outside those assertions and reduces the switched-off cost to a field read. Any
+implementation will meet the same constraint.
+
+**Intern the records.** A record is `(contributor, kind)` and is shared by every
+property that a given contributor mutates the same way, so recording costs one
+reference write and no allocation. Section 4 shows that interning is the single
+decision that makes provenance affordable, and section 6 what it forbids.
+
+Propagation across deferred configuration needs no new mechanism.
+`Application.reapplyLater` already wraps callbacks at registration, so a
+property set inside `tasks.register { }`, `tasks.named { }`,
+`withType(...).configureEach { }`, `afterEvaluate { }`, `projectsEvaluated { }`,
+`pluginManager.withPlugin(...) { }`, `taskGraph.whenReady { }` or a container
+`configureEach { }` is attributed to the plugin that registered the callback,
+not to whoever triggered it. Nesting works too: a plugin applying another plugin
+gets its own attribution restored when the inner application returns.
+
+This is a property of the registration boundary, not of the kind of user code. A
+Groovy closure, a Java `Action` and a Kotlin lambda registered through the same
+API behave identically, so there is no separate closure problem to solve.
+
+## 3. Where the contributor comes from
+
+| Current user code | Contributor key |
 |---|---|
 | Binary plugin with an ID | `Plugin(pluginId)` |
-| Binary plugin without an ID | `PluginClass(className, implementationIdentity)` |
+| Binary plugin without an ID | `PluginClass(className)` |
 | Build script | `BuildAuthor` |
-| Applied script plugin | `Script(normalizedUri)` |
-| No user-code context | `Unknown` |
+| Applied script plugin | `ScriptPlugin(normalizedUri)` |
+| No user code context | `Unknown` |
 
-The current binary-versus-script distinction is not by itself enough to tell a
-build script from an applied script plugin. The script application boundary
-must also supply that role, for example by enriching the user-code source
-descriptor. Inferring it later from a display name or URI would be fragile.
+Contributor keys must be stable across builds. Runtime objects such as a
+`ClassLoader` must not be part of persisted identity.
 
-The current application ID may be copied into the mutation record for
-diagnostics. It is not used for contributor ordering.
+The user code source describes the code being applied but does not say what
+*role* it plays. A build script and an applied script plugin are both scripts,
+and an initialization script and a settings script are indistinguishable from a
+project build script. A script's role must therefore be recorded where the
+script is applied, as a role rather than a boolean: conflating an init script
+with the build author would let the environment inherit whatever authority the
+build author has.
 
-The user-code context usually identifies a plugin or script but not an exact
-line inside a binary plugin. Precise legacy locations may be supplied by
-bytecode instrumentation of property mutation call sites. Without that
-instrumentation, the plugin ID, implementation class, and script URI still
-provide useful provenance.
+Display names should follow the wording task provenance already uses, so that
+`plugin 'com.example.feature'`, `plugin class 'FeaturePlugin'`,
+`build file 'lib/build.gradle'` and `script 'other.gradle'` read the same way
+everywhere. Naming a build file by a path relative to the build root keeps
+multi-project builds unambiguous and, for cross-project configuration, names the
+file that performed the mutation rather than the project that owns the property.
 
-Call-site instrumentation is a diagnostic supplement, not the primary source
-of contributor identity. A helper class may be called by several plugins, so
-its class or code source alone cannot identify which plugin caused a mutation.
+## 4. What it costs
 
-The existing JVM and Groovy call-interception pipeline can be extended for this
-purpose, but its current runtime interceptor input is not sufficient for a
-precise location. It can inject the caller class, while source file and line are
-currently available to the bytecode visitor and instrumentation-time reporting
-rather than to the runtime interceptor. Precise mutation locations therefore
-require either new source-file and line parameters in that pipeline or a
-property-specific equivalent. This does not require changing how contributor
-identity is propagated.
+Measured against a prototype, on the Gradle build itself (252 subprojects,
+263,281 properties created, 100,485 recorded mutations):
 
-## 5. Capturing Declarative and Reactive Plugin provenance
+| | per mutation | per property | on the Gradle build |
+|---|---|---|---|
+| No provenance at all | 3.4 ns | — | 0 |
+| Compiled in, switched off | 5.1 ns | +8 B | 2.2 MB |
+| Contributor only | 13.7 ns | +1 B, or +80 B once mutated twice | 3.3 MB |
+| Plus a call site on every mutation | +~1 µs | +~86 B per record | 12 MB, ~100 ms |
 
-Declarative Gradle supplies attribution explicitly when applying an assignment
-or executing a Reactive Plugin action:
+Contributor-only provenance is close to free: about 3 MB and a millisecond on a
+build whose configuration takes minutes, in a daemon holding several GB.
 
-```text
-withAttribution(
-    contributor = ReactivePlugin("feature-plugin"),
-    intent = StructuralUpdate,
-    location = declarative source range
-):
-    execute plugin action
-```
+Three observations shape any implementation:
 
-A build-author assignment instead uses `BuildAuthor` and the `SourceBinding`
-intent. Declarative assignment analysis already has the source element and
-operation generation; conversion must preserve the relevant source range when
-it invokes the runtime property setter.
+- **A single mutation must not allocate.** The average configured property in
+  the Gradle build is mutated 1.18 times, so a property should hold the interned
+  record directly and only promote to a list on a second mutation. Doing this
+  reduced the retained cost from 6.9 MB to 1.2 MB on that build.
+- **Call sites are a time cost, not a memory cost.** A bounded stack walk is
+  about a microsecond, so capturing one for every mutation adds roughly 100 ms
+  of configuration. Locations should therefore be optional and budgeted, in the
+  way problem reporting already budgets its stack captures.
+- **The existing bounded caller capture is not sufficient as it stands.** It
+  stops at the first Gradle frame below a user frame, and a Groovy property
+  assignment puts a generated, line-less accessor frame there, so the walk ends
+  before reaching the script. A mutation call site needs a walk that steps over
+  synthetic user frames.
 
-Explicit Declarative attribution takes precedence over an enclosing imperative
-plugin context. Otherwise a Reactive Plugin invoked through a bootstrap plugin
-would be incorrectly attributed to that bootstrap plugin.
+## 5. What is not covered
 
-The active attribution is therefore selected in this order:
+The honest limits, measured rather than assumed.
 
-```text
-explicit Declarative or Reactive Plugin attribution
-    orElse current imperative user-code application
-    orElse Unknown
-```
+**Only project-scope properties are tracked.** A tracking host exists only at
+project scope; global and worker scopes record nothing. On the Gradle build that
+is 64% of properties created and 65% of mutations. That population is not
+uniform:
 
-## 6. Propagating attribution through callbacks
+- roughly half is internal machinery no one would want attributed, such as
+  attribute containers and the managed object registry;
+- roughly a third is value isolation and deserialization re-creating properties,
+  where provenance belongs to the original mutation and not to the copy;
+- the remainder is real user-facing configuration created from a settings-scope
+  or otherwise non-project object factory, including plugins' own extension
+  objects. Only this last part is a gap worth closing, and closing it is mostly
+  a matter of providing a tracking host in more scopes.
 
-An active thread-local context alone is insufficient because many mutations
-occur in callbacks executed after plugin application. Gradle must capture the
-current attribution when user code is registered and restore it when the code
-is executed.
+**The configuration cache erases provenance.** A task property observed at
+execution has no provenance under the configuration cache, on the store run as
+well as on a hit, because the property is recreated during deserialization
+rather than by the user code that configured it. Provenance must be persisted
+with the entry, using stable descriptors rather than runtime application or
+class-loader objects, or the feature is blank in any build that uses the cache.
 
-For example:
+**Attribution can be confidently wrong.** Where propagation does not reach, the
+mutation is not left unattributed but attributed to whoever ran it:
+
+| Situation | Attributed to |
+|---|---|
+| A plugin's own thread or executor | `Unknown` |
+| User code a plugin stores itself and runs later | whoever ran it |
+| A property mutated as a side effect inside a `Provider` transform | whoever evaluated the transform |
+
+All three are written by one plugin and recorded against someone else:
 
 ```kotlin
-// Executed while plugin "com.example.feature" is active.
-tasks.configureEach {
-    enabled.set(enabled.map { current -> current && supported })
-}
+// In plugin "com.example.feature".
+
+// 1. A thread Gradle did not create. There is no context to restore, so the
+//    mutation is recorded as Unknown rather than as this plugin.
+executor.submit { task.prop.set("x") }
+
+// 2. A callback this plugin stores itself. Gradle never saw the registration,
+//    so it could not wrap it. Recorded as whoever runs it later, which for
+//    `Holder.runAll()` called from build.gradle is the build author.
+Holder.store { task.prop.set("x") }
+
+// 3. A transform that mutates another property while it is evaluated. Recorded
+//    as whoever first calls `trigger.prop.get()`.
+trigger.prop.set(provider {
+    other.prop.set("x")
+    "x"
+})
 ```
 
-`configureEach` stores a contextual callback:
+The third case is narrow, and worth stating precisely because it is easy to
+misread. Setting a property to a mapped provider is a mutation by whoever calls
+`set`, and reading a property records nothing at all, not even when the read
+finalizes it. So `a.set(b.map { })` in plugin A, later read by plugin B, is
+correctly attributed to A. What misattributes is only a lambda that mutates some
+*other* property while it runs, because that mutation happens during evaluation
+and inherits the evaluator's context.
 
-```text
-decorate(action):
-    snapshot = captureCurrentAttribution()
-    return action(argument):
-        withAttribution(snapshot):
-            delegate.execute(argument)
-```
+Only the first case is visible as unattributed; the other two produce a
+plausible and wrong contributor. This is the reason collaborative mode must fail
+closed rather than trust a recorded contributor. These are not hypothetical: on
+the Gradle build, most unattributed mutations come from one plugin mutating
+properties from its own asynchronous compiler runner.
 
-When the callback runs later, `set` still observes
-`Plugin("com.example.feature")`.
+**Collection contributions share one record.** Retaining only the last mutation
+means a list built by five plugins names one of them. Per-contribution
+provenance is required for collaborative mode in any case.
 
-One internal callback decorator should provide wrappers for the user-code forms
-that Gradle stores, including `Action`, `Closure`, `Spec`, `Runnable`,
-`Callable`, and relevant functional interfaces. Public Gradle APIs that retain
-user code must decorate it at registration rather than storing a raw callback.
-This includes task and domain-object configuration, lifecycle listeners,
-dependency-resolution callbacks, tooling model builders, and other deferred
-configuration actions.
+**`ConfigurableFileCollection` is not covered** by a mechanism built on the
+property mutation boundary, because it does not share that boundary.
 
-Internally, stored user code should have a contextual type rather than the raw
-callback type. This makes context capture an invariant of the storage boundary
-instead of a convention each callback subsystem must remember. Architecture
-checks can reject new fields or queues that retain raw user callbacks, while
-integration tests exercise the supported registration boundaries.
+## 6. What collaborative mode additionally requires
 
-Attribution scopes must be nested and restored in `finally`. If a callback from
-plugin A applies plugin B, mutations during B's application belong to B; after
-B returns, the active contributor is A again. A callback registered by another
-callback captures the currently restored contributor.
+Ordinary properties use provenance only as diagnostic metadata and may discard
+what a replacing `set` made irrelevant. Collaborative properties additionally
+retain the ordered update trace and validate its contributors. Three
+consequences follow from section 4:
 
-The contributor is normally the code that registered the callback. If a build
-script registers a callback that later calls a method on a plugin object, the
-mutation belongs to `BuildAuthor`, not to the class containing that method.
+**The retained record must carry nothing per-occurrence.** Interning is what
+makes a full trace affordable: a trace is a list of shared references costing
+about 4 bytes per additional record, against about 80 bytes per record without
+it. Anything that varies per mutation, such as a call site or an application
+ID, makes every record a distinct object. Since the application ID is not used
+for contributor ordering, it must be kept out of the retained trace, or held
+alongside it as an integer rather than as an object.
 
-Gradle can guarantee propagation only for Gradle-managed callbacks. Mutation
-from an arbitrary thread or executor created by a plugin has no reliable causal
-context and is unattributed unless that mechanism explicitly propagates a
-snapshot.
+**A per-property cap on retained records is not acceptable.** A bounded trace is
+right for diagnostics, where truncation only costs detail, but a truncated trace
+cannot be validated against a contributor order.
 
-### Existing closure instrumentation
-
-Gradle's existing Groovy closure instrumentation cannot propagate property
-provenance as it stands. It wraps `doCall` to track closures participating in
-Groovy dynamic-call interception and installs metaclass hooks when necessary.
-It does not capture the user-code application that registered a closure or
-restore a registration-specific attribution when the closure executes.
-
-Capturing attribution when a closure object is created would also have the
-wrong semantics. A closure may be created in one context, registered later in
-another, or registered more than once by different contributors. Provenance is
-causal, so it belongs to each registration. A wrapper allocated at registration
-can carry the correct snapshot for that particular use.
-
-The current closure visitor could be extended as a diagnostic safety hook, but
-it should not become the primary propagation mechanism. It also covers only
-Groovy closures, while Gradle retains Java and Kotlin `Action` and SAM
-implementations as well. Registration-time contextual wrappers provide one
-model for all of them.
-
-The implementation split is therefore:
-
-| Requirement | Recommended mechanism |
-|---|---|
-| Correct plugin or script contributor | Existing user-code application context, captured by a centralized registration-time callback decorator |
-| Explicit Reactive Plugin contributor | Declarative attribution scope, captured by the same decorator |
-| Precise legacy source file and line | Extend general call interception to pass call-site metadata, or use a property-specific interceptor |
-| Missing-context detection | Collaborative property rejects the mutation; instrumentation may report the call site |
-
-No new general closure instrumentation is required for contributor propagation.
-The existing callback-decoration approach needs to be made comprehensive and
-shared across callback registration points.
-
-Provider transforms are a separate concern. A `map`, `flatMap`, or `zip`
-callback may retain its creation context for evaluation diagnostics, but the
-contributor of `p.set(p.map(f))` is captured when `set` mutates `p`. Transform
-creation context must not replace mutation attribution in contributor-order
-validation.
-
-## 7. Recording provenance on properties
-
-Every binding or update captures attribution at the mutation boundary:
-
-```text
-mutate(kind, operation):
-    attribution = currentAttribution()
-    require attribution is allowed by the property's mode
-    originId = originRegistry.intern(attribution.origin)
-    apply operation
-    record(originId, attribution.applicationId, kind)
-```
-
-Applying the operation and retaining its record are conceptually one atomic
-mutation. A rejected or failed operation does not remain in the property's
-provenance trace; its captured attribution may still be used to report the
-failure.
-
-Attribution belongs to the property mutation. For example, if plugin A creates
-`p.map(f)` and plugin B later calls `p.set(thatProvider)`, the assignment is a
-mutation by B. Provider-node provenance may additionally describe where `f`
-was created, but it must not replace B as the contributor used for ordering.
-
-Ordinary and collaborative properties use the same capture mechanism but apply
-different policy:
-
-| Mode | Provenance behavior |
-|---|---|
-| Ordinary | Retain effective provenance for diagnostics; mutation semantics are unchanged |
-| Collaborative | Also retain the ordered update trace and validate its contributors |
-
-Outside collaborative mode, an implementation may discard provenance made
-irrelevant by a replacing `set` or convention replacement. It need not retain
-a complete audit history. Provenance for collection contributions and
-structural self-updates remains relevant while those contributions remain in
-the effective plan.
-
-Collaborative source bindings store the provenance of the selected explicit or
-convention source. Structural updates append compact mutation records to the
-collaborative update trace. The already composed Provider pipeline remains the
-source of value evaluation; provenance is not replayed to compute the value.
-
-## 8. Legacy mutations of collaborative properties
-
-An imperative plugin with an active user-code context is attributed, not
-anonymous. It can participate naturally when the operation has structural
-meaning, for example:
-
-```text
-convention(...)
-add(...), addAll(...)
-put(...), putAll(...)
-p.set(p.map(...))
-p.set(p.zip(...))
-```
-
-Declarative Gradle may include that plugin's stable contributor key in the
-applicable order. No source change to the imperative plugin is required.
-
-An arbitrary imperative `p.set(otherProvider)` is a replacement, not a
-structural collaboration update. It keeps ordinary replacement semantics on an
-ordinary property. On a collaborative property it must either run in an
-explicitly authorized source-binding context or be rejected; it must not be
-silently reinterpreted as a collaborative transformation.
-
-## 9. Unknown provenance and diagnostics
-
-Ordinary mode may record a shared `Unknown` origin without changing behavior.
-Collaborative mode must reject an unattributed mutation because `Unknown`
-cannot be authorized or placed in contributor order.
+**Unattributed mutation must be rejected.** `Unknown` cannot be authorized or
+placed in contributor order, so a collaborative property must fail before
+changing its state, and say so:
 
 ```text
 Cannot update collaborative property 'enabled': no contributor is active.
-
-Mutation call site:
-  FeatureHelper.kt:42
 
 The callback executing this mutation did not preserve its registration
 context.
 ```
 
-This fail-closed rule makes missing callback decoration visible instead of
-silently assigning the mutation to the wrong plugin. Instrumented call-site
-information can improve the error, but must not guess the contributor.
+This fail-closed rule makes a missing propagation visible instead of silently
+assigning the mutation to the wrong plugin.
 
-## 10. Storage and lifecycle
+On the Gradle build the practical cost of full retention is the same as
+diagnostics retention: the longest trace observed is 8 records and nothing
+approaches a cap.
 
-Provenance metadata should be compact and allocated lazily:
+## 7. Minimum conformance cases
 
-- intern contributor and origin descriptors in a build-scoped table;
-- store small origin IDs and operation tags on mutation records;
-- allocate the full ordered trace only for collaborative properties;
-- avoid adding provenance fields to every Provider transformation node;
-- avoid increasing the base size of every ordinary property merely to hold a
-  nullable provenance object.
-
-An implementation may attach ordinary effective provenance to immutable
-binding or contribution nodes and use a compact side trace for collaborative
-order validation. Structural Provider substitution must preserve relevant
-provenance when it path-copies a plan.
-
-Before observation or lifecycle closure, collaborative order validation reads
-the contributor keys referenced by the trace. It does not evaluate Provider
-transforms. Configuration Cache encoding must preserve any provenance needed
-for later diagnostics or validation, using stable descriptors rather than
-runtime application or class-loader objects.
-
-## 11. Minimum conformance cases
-
-A provenance implementation should verify at least these cases:
-
-- a direct mutation during imperative plugin application has that plugin's ID;
+- a direct mutation during plugin application has that plugin's ID;
 - a plugin applied by class receives a stable implementation contributor;
-- a build-script mutation belongs to `BuildAuthor`;
-- a deferred and a nested deferred callback retain the registrant's
-  contributor;
+- a build script mutation belongs to `BuildAuthor`, and an init or settings
+  script does not;
+- a deferred and a nested deferred callback retain the registrant's contributor;
 - applying another plugin temporarily changes and then restores attribution;
-- Declarative assignment locations survive runtime conversion;
-- explicit Reactive Plugin attribution overrides an enclosing bootstrap-plugin
-  context;
-- ordinary properties preserve their existing mutation results;
-- a mixed imperative and Reactive Plugin trace validates by contributor key;
+- a build file is named unambiguously in a multi-project build, and
+  cross-project configuration names the file that mutated the property;
+- ordinary properties preserve their existing mutation results, and their
+  diagnostics are unchanged when provenance is switched off;
 - an unattributed ordinary mutation is reported as `Unknown`;
 - an unattributed collaborative mutation fails before changing the property;
-- a Configuration Cache round trip preserves stable provenance descriptors;
-- recording provenance does not evaluate Provider transformations.
-
-## 12. Design summary
-
-```text
-imperative plugin or script context ----+
-                                        |
-Declarative explicit context -----------+--> current attribution
-                                                |
-callback capture and restoration ---------------+
-                                                |
-property mutation ------------------------------+
-                                                v
-                                  interned origin + mutation record
-                                                |
-                         +----------------------+-------------------+
-                         |                                          |
-               ordinary diagnostics                  collaboration validation
-```
-
-One provenance mechanism serves both imperative and Declarative plugins.
-Ordinary properties use it only as diagnostic metadata. Collaborative
-properties additionally require attributable contributors and use their stable
-keys to validate update order. The Provider value algebra remains unchanged.
+- a configuration cache round trip preserves provenance;
+- recording provenance does not evaluate Provider transformations;
+- recording a single mutation allocates nothing.
