@@ -231,9 +231,11 @@ closed rather than trust a recorded contributor. These are not hypothetical: on
 the Gradle build, most unattributed mutations come from one plugin mutating
 properties from its own asynchronous compiler runner.
 
-**Collection contributions share one record.** Retaining only the last mutation
-means a list built by five plugins names one of them. Per-contribution
-provenance is required for collaborative mode in any case.
+**A structural self-update is indistinguishable from a replacement.** Both
+`p.set(p.map(f))` and `p.set(unrelatedProvider)` record the same kind, so the
+mutation kind alone cannot tell a contribution from a replacement. Collaborative
+mode has to treat those differently, which means inspecting the provider plan
+for a self-reference rather than reading the kind.
 
 **`ConfigurableFileCollection` is not covered** by a mechanism built on the
 property mutation boundary, because it does not share that boundary.
@@ -256,6 +258,12 @@ alongside it as an integer rather than as an object.
 **A per-property cap on retained records is not acceptable.** A bounded trace is
 right for diagnostics, where truncation only costs detail, but a truncated trace
 cannot be validated against a contributor order.
+
+**The granularity is already right.** Each mutation is one entry, and each
+collection contribution is its own entry with its own contributor, so the
+ordered contributor sequence a validation needs is directly available. A chain
+of transforms inside a single update is one entry, which is also correct: the
+update is the unit of collaboration, not the transform steps within it.
 
 **Unattributed mutation must be rejected.** `Unknown` cannot be authorized or
 placed in contributor order, so a collaborative property must fail before
