@@ -137,7 +137,7 @@ Measured against a prototype, on the Gradle build itself (252 subprojects,
 | No provenance at all | 3.4 ns | — | 0 |
 | Compiled in, switched off | 5.1 ns | +8 B | 2.2 MB |
 | Contributor only | 13.7 ns | +1 B, or +80 B once mutated twice | 3.3 MB |
-| Plus a call site on every mutation | +~1 µs | +~86 B per record | 12 MB, ~100 ms |
+| Plus a call site on every mutation | +~7 µs | +~86 B per record | 12 MB, ~720 ms |
 
 Contributor-only provenance is close to free: about 3 MB and a millisecond on a
 build whose configuration takes minutes, in a daemon holding several GB.
@@ -148,10 +148,13 @@ Three observations shape any implementation:
   the Gradle build is mutated 1.18 times, so a property should hold the interned
   record directly and only promote to a list on a second mutation. Doing this
   reduced the retained cost from 6.9 MB to 1.2 MB on that build.
-- **Call sites are a time cost, not a memory cost.** A bounded stack walk is
-  about a microsecond, so capturing one for every mutation adds roughly 100 ms
-  of configuration. Locations should therefore be optional and budgeted, in the
-  way problem reporting already budgets its stack captures.
+- **Call sites are a time cost, not a memory cost.** A bounded stack walk costs
+  about 7 µs on average in a real build, so capturing one for every mutation
+  adds around 700 ms of configuration. The cost scales with the frames the walk
+  must skip, and is worst when it finds nothing: on the Gradle build 22% of
+  captures reach the depth cap without finding a user frame. Locations should
+  therefore be optional and budgeted, in the way problem reporting already
+  budgets its stack captures.
 - **The existing bounded caller capture is not sufficient as it stands.** It
   stops at the first Gradle frame below a user frame, and a Groovy property
   assignment puts a generated, line-less accessor frame there, so the walk ends
