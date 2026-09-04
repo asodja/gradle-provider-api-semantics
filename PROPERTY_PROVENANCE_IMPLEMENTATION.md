@@ -393,14 +393,20 @@ records. Locations and application IDs can be held as optional integer side
 data. A collaborative trace should use a compact integer array rather than one
 object per occurrence.
 
-Rendering then reads effective state directly:
+The Provider plan is composed from source to updates, but the renderer walks
+that state in the opposite direction so that it reads like a Java stack trace:
 
 ```text
+failed operation, for a failure report
+last effective update
+earlier effective updates
 selected explicit or convention origin
-    -> effective update records
 ```
 
-It reads chronological history only when historical detail is requested.
+The headings are `Failure trace to source` when the first frame is an operation
+that failed, and `Configuration trace to source` when provenance is requested
+without a failure. Shadowed configuration stays outside the trace. The
+renderer reads chronological history only when historical detail is requested.
 
 ## 10. Recommended sequence
 

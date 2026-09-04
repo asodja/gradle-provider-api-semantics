@@ -274,6 +274,7 @@ feature-plugin < override-plugin
 Both updates are composed immediately:
 
 ```kotlin
+// base-plugin
 enabled.convention(true)
 
 // feature-plugin
@@ -333,13 +334,24 @@ but the recorded trace is invalid under the global order. An observation such
 as `enabled.get()` fails before evaluating the Provider plan:
 
 ```text
-Cannot observe 'enabled': contributor updates are out of order.
+Cannot query collaborative property 'enabled': contributor updates are out of
+order.
+
+Failure trace to source:
+    at task ':show' action (ShowTask.kt:34) [get()]
+    at plugin 'feature-plugin' (FeaturePlugin.kt:41) [zip update]
+    at plugin 'override-plugin' (OverridePlugin.kt:27) [zip update]
+    at plugin 'base-plugin' (BasePlugin.kt:18) [convention source]
 
 Required contributor order:
-  feature-plugin < override-plugin
+    feature-plugin < override-plugin
 
-Recorded update order:
-  override-plugin -> feature-plugin
+Conflicting updates, in application order:
+    1. at plugin 'override-plugin' (OverridePlugin.kt:27) [zip update]
+    2. at plugin 'feature-plugin' (FeaturePlugin.kt:41) [zip update]
+       This update must precede update 1.
+
+The Provider value was not evaluated.
 ```
 
 The reversed application can instead be made valid for this property by

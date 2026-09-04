@@ -176,48 +176,59 @@ source followed by the complete accepted update pipeline.
 
 ### Example
 
-Suppose these successful mutations occur:
+Suppose these successful mutations occur. The line numbers identify the four
+mutation call sites used by both views below:
 
-```kotlin
-// base plugin
-enabled.convention(true)
-
-// feature plugin
-enabled.set(
-    enabled.zip(featureAvailable) { current, available ->
-        current && available
-    }
-)
-
-// declarative build source
-enabled.set(userChoice)
-
-// override plugin
-enabled.set(
-    enabled.zip(forceEnabled) { current, forced ->
-        current || forced
-    }
-)
+```text
+ 1 | // base plugin
+ 2 | enabled.convention(true)
+ 3 |
+ 4 | // feature plugin
+ 5 | enabled.set(
+ 6 |     enabled.zip(featureAvailable) { current, available ->
+ 7 |         current && available
+ 8 |     }
+ 9 | )
+10 |
+11 | // declarative build source
+12 | enabled.set(userChoice)
+13 |
+14 | // override plugin
+15 | enabled.set(
+16 |     enabled.zip(forceEnabled) { current, forced ->
+17 |         current || forced
+18 |     }
+19 | )
 ```
 
 Their chronological order is:
 
 ```text
-1. convention bound by the base plugin
-2. zip update contributed by the feature plugin
-3. explicit source bound by the build author
-4. zip update contributed by the override plugin
+1. line 2: convention bound by the base plugin
+2. line 5: zip update contributed by the feature plugin
+3. line 12: explicit source bound by the build author
+4. line 15: zip update contributed by the override plugin
 ```
 
-Their effective provenance is instead:
+The same state renders as a configuration trace from the resulting plan back to
+its selected source:
 
 ```text
-explicit source from the build author
-    -> zip update from the feature plugin
-    -> zip update from the override plugin
+Configuration trace to source:
+    at line 15 [zip update from the override plugin]
+    at line 5 [zip update from the feature plugin]
+    at line 12 [explicit source from the build author]
 
-shadowed convention: base plugin
+Shadowed configuration:
+    at line 2 [convention from the base plugin]
 ```
+
+Line 15 is first because its update is closest to the resulting plan. Line 5
+precedes line 12 chronologically, yet appears above it in the configuration
+trace because collaborative source selection and the update pipeline are
+separate. Line 12 supplies the selected source; the already accepted update
+from line 5 and then the update from line 15 are applied to that source. The
+convention from line 2 is not selected once line 12 binds an explicit source.
 
 The effective plan computes:
 
@@ -225,8 +236,9 @@ The effective plan computes:
 (userChoice && featureAvailable) || forceEnabled
 ```
 
-Chronological lists should use numbers. Arrows should be reserved for effective
-value flow so the two views cannot be mistaken for each other.
+Chronological history uses an oldest-first numbered list. A configuration trace
+uses stack-trace-shaped frames from the resulting plan back to its source, so
+the two views cannot be mistaken for each other.
 
 ## 5. Mutation history
 
@@ -266,21 +278,24 @@ Diagnostics should:
 - avoid claiming that the contributor who bound a Provider produced all of its
   dependencies.
 
-An explicit explanation can show the effective chain:
+A failure trace starts with the operation that exposed or attempted to change
+the property. It then walks the effective configuration from the resulting
+plan back to the selected source. The failed operation is not itself part of
+the configuration provenance.
+
+An explicit explanation has no failed-operation frame, so it shows only the
+configuration trace:
 
 ```text
 Property task ':show' property 'enabled'
 
-Effective configuration:
-  source
-    set by build file 'app/build.gradle.kts' at line 18
-  update 1 (zip)
-    contributed by plugin 'com.example.feature' at FeaturePlugin.kt:41
-  update 2 (zip)
-    contributed by plugin 'com.example.override' at OverridePlugin.kt:27
+Configuration trace to source:
+    at plugin 'com.example.override' (OverridePlugin.kt:27) [zip update]
+    at plugin 'com.example.feature' (FeaturePlugin.kt:41) [zip update]
+    at build file 'app/build.gradle.kts' (build.gradle.kts:18) [explicit source]
 
-Shadowed:
-  convention supplied by plugin 'com.example.base'
+Shadowed configuration:
+    at plugin 'com.example.base' (BasePlugin.kt:18) [convention]
 ```
 
 A failed mutation should show both sides without adding the attempt to history:
@@ -288,14 +303,12 @@ A failed mutation should show both sides without adding the attempt to history:
 ```text
 The value for task ':show' property 'enabled' is final and cannot be changed.
 
-Attempted change:
-  set by build file 'app/build.gradle.kts' at line 24
+Failure trace to source:
+    at build file 'app/build.gradle.kts' (build.gradle.kts:24) [set()]
+    at plugin 'com.example.feature' (FeaturePlugin.kt:41) [explicit source]
 
-Current binding:
-  set by plugin 'com.example.feature' at FeaturePlugin.kt:41
-
-Earlier configuration:
-  convention supplied by plugin 'com.example.base'
+Shadowed configuration:
+    at plugin 'com.example.base' (BasePlugin.kt:18) [convention]
 ```
 
 When an explicitly selected Provider is missing, the message should distinguish
@@ -305,11 +318,14 @@ that from an unconfigured property and from convention fallback:
 Cannot query task ':show' property 'enabled' because its selected Provider has
 no value.
 
-Selected binding:
-  set by plugin 'com.example.feature' at FeaturePlugin.kt:41
+Failure trace to source:
+    at task ':show' action (ShowTask.kt:34) [get()]
+    at plugin 'com.example.override' (OverridePlugin.kt:27) [zip update]
+    at plugin 'com.example.feature' (FeaturePlugin.kt:41) [zip update]
+    at build file 'app/build.gradle.kts' (build.gradle.kts:18) [explicit source]
 
-Shadowed:
-  convention supplied by plugin 'com.example.base'
+Shadowed configuration:
+    at plugin 'com.example.base' (BasePlugin.kt:18) [convention]
 ```
 
 ## 7. Collaborative properties
@@ -343,13 +359,19 @@ reports the required relationship and the first conflicting pair:
 Cannot query collaborative property 'enabled': contributor updates are out of
 order.
 
-Required order:
-  plugin 'com.example.feature' before plugin 'com.example.override'
+Failure trace to source:
+    at task ':show' action (ShowTask.kt:34) [get()]
+    at plugin 'com.example.feature' (FeaturePlugin.kt:41) [zip update]
+    at plugin 'com.example.override' (OverridePlugin.kt:27) [zip update]
+    at build file 'app/build.gradle.kts' (build.gradle.kts:18) [explicit source]
 
-Conflicting updates:
-  1. zip update by plugin 'com.example.override' at OverridePlugin.kt:27
-  2. zip update by plugin 'com.example.feature' at FeaturePlugin.kt:41
-     This update must precede update 1.
+Required order:
+    plugin 'com.example.feature' before plugin 'com.example.override'
+
+Conflicting updates, in application order:
+    1. zip update by plugin 'com.example.override' at OverridePlugin.kt:27
+    2. zip update by plugin 'com.example.feature' at FeaturePlugin.kt:41
+       This update must precede update 1.
 
 The Provider value was not evaluated.
 ```
@@ -374,6 +396,9 @@ or class-loader objects.
 - a collaborative source rebind retains the accepted update pipeline;
 - mutation history includes successful shadowed or superseded operations;
 - a rejected mutation appears only as the attempted origin on its problem;
+- a failure trace begins with the failed operation and continues through the
+  effective configuration to the selected source, while shadowed configuration
+  remains outside that trace;
 - an unattributed ordinary mutation is represented as `Unknown`;
 - an unidentified or unauthorized collaborative mutation fails before changing
   property state;
