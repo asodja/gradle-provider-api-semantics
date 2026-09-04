@@ -6,7 +6,7 @@ This document describes an optional binding mode for properties configured by
 Declarative Gradle Reactive Plugins. It extends the model in
 [Provider API Foundations](PROVIDER_API_FOUNDATIONS.md) and uses the shared
 attribution mechanism in
-[Property Mutation Provenance](PROPERTY_PROVENANCE.md).
+[Property Provenance](PROPERTY_PROVENANCE.md).
 
 Reactive Plugins operate on `Property` instances directly. A collaborative
 property attributes their structural updates and immediately composes them
@@ -80,7 +80,7 @@ CollaborativeState<T>:
 `updatePipeline` is initially the identity transformation.
 `updateTrace` records each structural operation's contributor, kind, and
 diagnostic origin as defined by
-[Property Mutation Provenance](PROPERTY_PROVENANCE.md). `validationState`
+[Property Provenance](PROPERTY_PROVENANCE.md). `validationState`
 caches whether the current trace and constraints have been checked.
 
 The existing explicit-versus-convention rule selects the source:

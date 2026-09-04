@@ -33,24 +33,36 @@ The basic semantic model:
 Start here. Every other document builds on these selection and provider
 semantics.
 
-### [Property Mutation Provenance](PROPERTY_PROVENANCE.md)
+### [Property Provenance](PROPERTY_PROVENANCE.md)
 
-A shared attribution model for ordinary and collaborative properties,
-revised against a prototype and its measurements:
+The semantic attribution model shared by ordinary and collaborative
+properties:
 
-- distinguishes stable contributor identity, runtime application identity,
-  source location, and mutation kind;
-- derives contributor identity from Gradle's user-code application context,
-  which already restores attribution across the callbacks Gradle stores;
-- captures at the mutation boundary, reached through the property's host, and
-  decides whether to track when the property is created;
-- interns records so that recording allocates nothing;
-- reports what contributor-only and located provenance actually cost;
-- states what is not covered: properties outside project scope, the
-  configuration cache, plugin-owned threads and callback stores, and
-  collection contributions;
-- defines fail-closed behavior for unattributed collaborative mutation, and
-  what a retained trace forbids.
+- distinguishes mutation attribution, effective provenance, chronological
+  mutation history, and Provider dependencies;
+- separates stable contributor identity from diagnostic origin, runtime
+  application identity, source location, and semantic operation;
+- defines effective provenance as the selected source followed by the
+  structural updates that still determine the Provider plan;
+- defines mutation history as a separate oldest-first diagnostic view;
+- specifies problem-focused console output without exposing property values;
+- requires explicit contributor authority and a complete update trace for
+  collaborative properties.
+
+### [Property Provenance Implementation](PROPERTY_PROVENANCE_IMPLEMENTATION.md)
+
+Implementation notes and measured evidence from the Gradle prototype:
+
+- captures attribution at the `AbstractProperty` mutation boundary through the
+  existing property host and user-code application context;
+- documents callback coverage, record interning, and the single-record storage
+  optimization;
+- reports the measured time and memory costs of contributor and call-site
+  provenance;
+- records current gaps in scope coverage, configuration-cache persistence,
+  script roles, structural operation classification, and callback authority;
+- outlines the next representation needed for effective provenance and
+  collaborative validation.
 
 ### [Collaborative Property Mode](COLLABORATIVE_PROPERTY_UPDATES.md)
 
@@ -105,7 +117,8 @@ Provider API Foundations
     +--> Self-Referencing Property Bindings --+
     |         +--> compound collection assignment
     |                                         +--> Collaborative Property Mode
-    +--> Property Mutation Provenance --------+
+    +--> Property Provenance -----------------+
+              +--> Property Provenance Implementation
 ```
 
 Read the foundations first. The other documents build on that core. Compound
